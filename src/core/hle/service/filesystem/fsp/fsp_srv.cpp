@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdlib>
 #include <cstring>
@@ -45,8 +46,132 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/loader/loader.h"
 #include "core/reporter.h"
+#include "common/fs/file.h"
+#include "common/fs/fs.h"
+#include "core/file_sys/vfs/vfs_offset.h"
 
 namespace Service::FileSystem {
+
+namespace {
+
+// Diagnostics for the Switch 2 Mii model fallback, off unless their variable is set.
+// EDEN_NX2_MII_TRACE=1 logs the served archive's files and every guest read mapped to a file.
+// EDEN_NX2_MII_DUMP=<dir> writes the served archive's files to <dir>.
+class MiiTraceFile final : public FileSys::VfsFile {
+public:
+    struct Entry {
+        std::size_t begin;
+        std::size_t end;
+        std::string path;
+    };
+
+    MiiTraceFile(FileSys::VirtualFile backend_, std::vector<Entry> entries_)
+        : backend{std::move(backend_)}, entries{std::move(entries_)} {}
+
+    std::string GetName() const override {
+        return backend->GetName();
+    }
+    std::size_t GetSize() const override {
+        return backend->GetSize();
+    }
+    bool Resize(std::size_t) override {
+        return false;
+    }
+    FileSys::VirtualDir GetContainingDirectory() const override {
+        return backend->GetContainingDirectory();
+    }
+    bool IsWritable() const override {
+        return false;
+    }
+    bool IsReadable() const override {
+        return true;
+    }
+    std::size_t Write(const u8*, std::size_t, std::size_t) override {
+        return 0;
+    }
+    bool Rename(std::string_view) override {
+        return false;
+    }
+
+    std::size_t Read(u8* data, std::size_t length, std::size_t offset) const override {
+        if (logged < 4000) {
+            ++logged;
+            std::string where = "romfs metadata";
+            for (const auto& entry : entries) {
+                if (offset < entry.end && offset + length > entry.begin) {
+                    where = fmt::format("{} +{:#x}", entry.path,
+                                        offset > entry.begin ? offset - entry.begin : 0);
+                    break;
+                }
+            }
+            LOG_INFO(Service_FS, "Mii trace: read {:#x} bytes at {:#x} ({})", length, offset,
+                     where);
+        }
+        return backend->Read(data, length, offset);
+    }
+
+private:
+    FileSys::VirtualFile backend;
+    std::vector<Entry> entries;
+    mutable std::size_t logged = 0;
+};
+
+void CollectMiiFiles(const FileSys::VirtualDir& dir, const std::string& prefix,
+                     std::vector<std::pair<std::string, FileSys::VirtualFile>>& out) {
+    if (dir == nullptr) {
+        return;
+    }
+    for (const auto& file : dir->GetFiles()) {
+        out.emplace_back(prefix + file->GetName(), file);
+    }
+    for (const auto& sub : dir->GetSubdirectories()) {
+        CollectMiiFiles(sub, prefix + sub->GetName() + "/", out);
+    }
+}
+
+FileSys::VirtualFile InstrumentMiiModel(FileSys::VirtualFile data) {
+    const char* trace = std::getenv("EDEN_NX2_MII_TRACE");
+    const char* dump = std::getenv("EDEN_NX2_MII_DUMP");
+    const bool tracing = trace != nullptr && trace[0] != '0';
+    if (!tracing && (dump == nullptr || dump[0] == '\0')) {
+        return data;
+    }
+
+    std::vector<std::pair<std::string, FileSys::VirtualFile>> files;
+    CollectMiiFiles(FileSys::ExtractRomFS(data), "", files);
+
+    std::vector<MiiTraceFile::Entry> entries;
+    for (const auto& [path, file] : files) {
+        const auto bytes = file->ReadBytes(std::min<std::size_t>(file->GetSize(), 32));
+        std::size_t begin = 0;
+        if (const auto offset_file = std::dynamic_pointer_cast<FileSys::OffsetVfsFile>(file)) {
+            begin = offset_file->GetOffset();
+        }
+        entries.push_back({begin, begin + file->GetSize(), path});
+        LOG_INFO(Service_FS, "Mii trace: file {} size={:#x} at {:#x} head={}", path,
+                 file->GetSize(), begin, Common::HexToString(bytes));
+
+        if (dump != nullptr && dump[0] != '\0') {
+            const std::filesystem::path out_path = std::filesystem::path{dump} / path;
+            (void)Common::FS::CreateParentDirs(out_path);
+            Common::FS::IOFile out{out_path, Common::FS::FileAccessMode::Write,
+                                   Common::FS::FileType::BinaryFile};
+            const auto all = file->ReadAllBytes();
+            if (out.IsOpen() && out.WriteSpan(std::span<const u8>{all}) == all.size()) {
+                LOG_INFO(Service_FS, "Mii trace: dumped {}", out_path.string());
+            } else {
+                LOG_WARNING(Service_FS, "Mii trace: could not write {}", out_path.string());
+            }
+        }
+    }
+
+    if (!tracing) {
+        return data;
+    }
+    return std::make_shared<MiiTraceFile>(std::move(data), std::move(entries));
+}
+
+} // namespace
 
 FSP_SRV::FSP_SRV(Core::System& system_)
     : ServiceFramework{system_, "fsp-srv"}, fsc{system.GetFileSystemController()},
@@ -531,7 +656,8 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
         if (data) {
             LOG_WARNING(Service_FS, "Serving MiiModel {:016X} for Switch 2 system data {:016X}",
                         MiiModelId, title_id);
-            *out_interface = std::make_shared<IStorage>(system, std::move(data));
+            *out_interface =
+                std::make_shared<IStorage>(system, InstrumentMiiModel(std::move(data)));
             R_SUCCEED();
         }
         LOG_WARNING(Service_FS, "MiiModel {:016X} is not installed, no fallback for {:016X}",
