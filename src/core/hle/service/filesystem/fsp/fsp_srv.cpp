@@ -48,7 +48,6 @@
 #include "core/reporter.h"
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
-#include "core/file_sys/vfs/vfs_offset.h"
 
 namespace Service::FileSystem {
 
@@ -116,17 +115,40 @@ private:
     mutable std::size_t logged = 0;
 };
 
-void CollectMiiFiles(const FileSys::VirtualDir& dir, const std::string& prefix,
-                     std::vector<std::pair<std::string, FileSys::VirtualFile>>& out) {
-    if (dir == nullptr) {
-        return;
+// Reads the file table of a plain RomFS: name, absolute offset and size of every file.
+std::vector<MiiTraceFile::Entry> ListRomFSFiles(const FileSys::VirtualFile& romfs) {
+    std::vector<MiiTraceFile::Entry> out;
+    const auto header = romfs->ReadBytes(0x50);
+    if (header.size() != 0x50) {
+        return out;
     }
-    for (const auto& file : dir->GetFiles()) {
-        out.emplace_back(prefix + file->GetName(), file);
+    const auto u64_at = [&header](std::size_t i) {
+        u64 value;
+        std::memcpy(&value, header.data() + i * 8, sizeof(value));
+        return value;
+    };
+    const u64 file_meta_offset = u64_at(7);
+    const u64 file_meta_size = u64_at(8);
+    const u64 data_offset = u64_at(9);
+    const auto meta = romfs->ReadBytes(file_meta_size, file_meta_offset);
+
+    std::size_t pos = 0;
+    while (pos + 0x20 <= meta.size()) {
+        u64 offset;
+        u64 size;
+        u32 name_size;
+        std::memcpy(&offset, meta.data() + pos + 0x8, sizeof(offset));
+        std::memcpy(&size, meta.data() + pos + 0x10, sizeof(size));
+        std::memcpy(&name_size, meta.data() + pos + 0x1C, sizeof(name_size));
+        if (pos + 0x20 + name_size > meta.size()) {
+            break;
+        }
+        std::string name(reinterpret_cast<const char*>(meta.data() + pos + 0x20), name_size);
+        const std::size_t begin = data_offset + offset;
+        out.push_back({begin, begin + size, std::move(name)});
+        pos += 0x20 + ((name_size + 3) & ~std::size_t{3});
     }
-    for (const auto& sub : dir->GetSubdirectories()) {
-        CollectMiiFiles(sub, prefix + sub->GetName() + "/", out);
-    }
+    return out;
 }
 
 FileSys::VirtualFile InstrumentMiiModel(FileSys::VirtualFile data) {
@@ -137,26 +159,19 @@ FileSys::VirtualFile InstrumentMiiModel(FileSys::VirtualFile data) {
         return data;
     }
 
-    std::vector<std::pair<std::string, FileSys::VirtualFile>> files;
-    CollectMiiFiles(FileSys::ExtractRomFS(data), "", files);
-
-    std::vector<MiiTraceFile::Entry> entries;
-    for (const auto& [path, file] : files) {
-        const auto bytes = file->ReadBytes(std::min<std::size_t>(file->GetSize(), 32));
-        std::size_t begin = 0;
-        if (const auto offset_file = std::dynamic_pointer_cast<FileSys::OffsetVfsFile>(file)) {
-            begin = offset_file->GetOffset();
-        }
-        entries.push_back({begin, begin + file->GetSize(), path});
-        LOG_INFO(Service_FS, "Mii trace: file {} size={:#x} at {:#x} head={}", path,
-                 file->GetSize(), begin, Common::HexToString(bytes));
+    auto entries = ListRomFSFiles(data);
+    for (const auto& entry : entries) {
+        const std::size_t size = entry.end - entry.begin;
+        const auto bytes = data->ReadBytes(std::min<std::size_t>(size, 32), entry.begin);
+        LOG_INFO(Service_FS, "Mii trace: file {} size={:#x} at {:#x} head={}", entry.path, size,
+                 entry.begin, Common::HexToString(bytes));
 
         if (dump != nullptr && dump[0] != '\0') {
-            const std::filesystem::path out_path = std::filesystem::path{dump} / path;
+            const std::filesystem::path out_path = std::filesystem::path{dump} / entry.path;
             (void)Common::FS::CreateParentDirs(out_path);
             Common::FS::IOFile out{out_path, Common::FS::FileAccessMode::Write,
                                    Common::FS::FileType::BinaryFile};
-            const auto all = file->ReadAllBytes();
+            const auto all = data->ReadBytes(size, entry.begin);
             if (out.IsOpen() && out.WriteSpan(std::span<const u8>{all}) == all.size()) {
                 LOG_INFO(Service_FS, "Mii trace: dumped {}", out_path.string());
             } else {
