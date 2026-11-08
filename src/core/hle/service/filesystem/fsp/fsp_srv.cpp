@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <string>
@@ -514,6 +515,28 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
               storage_id, unknown, title_id);
 
     auto data = romfs_controller->OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
+
+    // Experiment: Nintendo Switch Sports Resort reads Mii head models from Switch 2 system data
+    // 0400000000000849. When it is not installed, serve the Switch 1 MiiModel (0100000000000802)
+    // from the installed firmware. EDEN_NX2_MII_MODEL_FALLBACK=0 disables this.
+    constexpr u64 Nx2MiiModelId = 0x0400000000000849;
+    constexpr u64 MiiModelId = 0x0100000000000802;
+    static const bool mii_model_fallback = [] {
+        const char* setting = std::getenv("EDEN_NX2_MII_MODEL_FALLBACK");
+        return setting == nullptr || setting[0] != '0';
+    }();
+    if (!data && title_id == Nx2MiiModelId && mii_model_fallback) {
+        data = romfs_controller->OpenRomFS(MiiModelId, FileSys::StorageId::NandSystem,
+                                           FileSys::ContentRecordType::Data);
+        if (data) {
+            LOG_WARNING(Service_FS, "Serving MiiModel {:016X} for Switch 2 system data {:016X}",
+                        MiiModelId, title_id);
+            *out_interface = std::make_shared<IStorage>(system, std::move(data));
+            R_SUCCEED();
+        }
+        LOG_WARNING(Service_FS, "MiiModel {:016X} is not installed, no fallback for {:016X}",
+                    MiiModelId, title_id);
+    }
 
     if (!data) {
         const auto archive = FileSys::SystemArchive::SynthesizeSystemArchive(title_id);
