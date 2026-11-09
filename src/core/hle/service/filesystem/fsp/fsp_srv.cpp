@@ -61,23 +61,44 @@ namespace Service::FileSystem {
 
 namespace {
 
-// Experiment: re-lays out the textures of a Switch 1 NXTexture file. They are stored
-// block-linear; EDEN_NX2_MII_TEX_LAYOUT picks the layout the OunceTexture copies get:
-// "linear" (default) tightly packed rows, "linear32" rows aligned to 32 bytes with each mip
-// aligned to 512 bytes, "bl" unchanged.
-enum class MiiTexLayout { BlockLinear, Linear, Linear32 };
+// Experiment: re-lays out the textures of a Switch 1 NXTexture file, which are stored
+// block-linear with the NVN block height rules. EDEN_NX2_MII_TEX_LAYOUT picks what the
+// OunceTexture copies get:
+//   "bl1" (default) block-linear level 0 only, mip count set to 1
+//   "blkeep"        block-linear, every mip keeps level 0's block height
+//   "blone"         block-linear, block height 1 for every mip
+//   "bl"            unchanged
+//   "linear"        tightly packed rows
+//   "linear32"      rows aligned to 32 bytes, each mip aligned to 512 bytes
+enum class MiiTexLayout {
+    BlockLinear,
+    BlockLinearLevel0,
+    BlockLinearKeep,
+    BlockLinearOne,
+    Linear,
+    Linear32,
+};
 
 MiiTexLayout GetMiiTexLayout() {
     static const MiiTexLayout layout = [] {
         const char* setting = std::getenv("EDEN_NX2_MII_TEX_LAYOUT");
-        const std::string_view value = setting != nullptr ? setting : "linear";
+        const std::string_view value = setting != nullptr ? setting : "bl1";
         if (value == "bl") {
             return MiiTexLayout::BlockLinear;
+        }
+        if (value == "blkeep") {
+            return MiiTexLayout::BlockLinearKeep;
+        }
+        if (value == "blone") {
+            return MiiTexLayout::BlockLinearOne;
+        }
+        if (value == "linear") {
+            return MiiTexLayout::Linear;
         }
         if (value == "linear32") {
             return MiiTexLayout::Linear32;
         }
-        return MiiTexLayout::Linear;
+        return MiiTexLayout::BlockLinearLevel0;
     }();
     return layout;
 }
@@ -96,8 +117,13 @@ std::size_t BlockLinearOffset(std::size_t x, std::size_t y, std::size_t gobs_wid
     return block * 512 * block_height + gob * 512 + in_gob;
 }
 
+std::size_t BlockLinearSize(std::size_t row_bytes, std::size_t rows, std::size_t block_height) {
+    return DivCeil(row_bytes, 64) * DivCeil(DivCeil(rows, 8), block_height) * block_height * 512;
+}
+
+// Converts one texture; `mips` is updated when the layout drops levels.
 std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 width, u32 height,
-                                                 u8 format, u8 mips, MiiTexLayout layout) {
+                                                 u8 format, u8& mips, MiiTexLayout layout) {
     std::size_t bytes_per_block;
     std::size_t block_dim;
     switch (format) {
@@ -122,6 +148,7 @@ std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 wi
     while (block_height0 < 16 && block_height0 * 8 < rows0) {
         block_height0 *= 2;
     }
+    const u8 out_mips = layout == MiiTexLayout::BlockLinearLevel0 ? u8{1} : mips;
 
     std::vector<u8> out;
     std::size_t src_offset = 0;
@@ -130,32 +157,53 @@ std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 wi
             DivCeil(std::max<u32>(1, width >> mip), block_dim) * bytes_per_block;
         const std::size_t rows = DivCeil(std::max<u32>(1, height >> mip), block_dim);
         const std::size_t gobs_wide = DivCeil(row_bytes, 64);
-        const std::size_t gob_rows = DivCeil(rows, 8);
         std::size_t block_height = block_height0;
-        while (block_height > 1 && block_height / 2 >= gob_rows) {
+        while (block_height > 1 && block_height / 2 >= DivCeil(rows, 8)) {
             block_height /= 2;
         }
-        const std::size_t mip_size =
-            gobs_wide * DivCeil(gob_rows, block_height) * block_height * 512;
+        const std::size_t mip_size = BlockLinearSize(row_bytes, rows, block_height);
         if (src_offset + mip_size > src.size()) {
             return std::nullopt;
         }
-
-        const std::size_t pitch =
-            layout == MiiTexLayout::Linear32 ? DivCeil(row_bytes, 32) * 32 : row_bytes;
-        if (layout == MiiTexLayout::Linear32) {
-            out.resize(DivCeil(out.size(), 512) * 512);
+        if (mip >= out_mips) {
+            break;
         }
-        const std::size_t base = out.size();
-        out.resize(base + pitch * rows);
-        for (std::size_t y = 0; y < rows; ++y) {
-            for (std::size_t x = 0; x < row_bytes; ++x) {
-                out[base + y * pitch + x] =
-                    src[src_offset + BlockLinearOffset(x, y, gobs_wide, block_height)];
+
+        const auto source_at = [&](std::size_t x, std::size_t y) {
+            return src[src_offset + BlockLinearOffset(x, y, gobs_wide, block_height)];
+        };
+        if (layout == MiiTexLayout::Linear || layout == MiiTexLayout::Linear32) {
+            const std::size_t pitch =
+                layout == MiiTexLayout::Linear32 ? DivCeil(row_bytes, 32) * 32 : row_bytes;
+            if (layout == MiiTexLayout::Linear32) {
+                out.resize(DivCeil(out.size(), 512) * 512);
+            }
+            const std::size_t base = out.size();
+            out.resize(base + pitch * rows);
+            for (std::size_t y = 0; y < rows; ++y) {
+                for (std::size_t x = 0; x < row_bytes; ++x) {
+                    out[base + y * pitch + x] = source_at(x, y);
+                }
+            }
+        } else {
+            std::size_t out_block_height = block_height;
+            if (layout == MiiTexLayout::BlockLinearKeep) {
+                out_block_height = block_height0;
+            } else if (layout == MiiTexLayout::BlockLinearOne) {
+                out_block_height = 1;
+            }
+            const std::size_t base = out.size();
+            out.resize(base + BlockLinearSize(row_bytes, rows, out_block_height));
+            for (std::size_t y = 0; y < rows; ++y) {
+                for (std::size_t x = 0; x < row_bytes; ++x) {
+                    out[base + BlockLinearOffset(x, y, gobs_wide, out_block_height)] =
+                        source_at(x, y);
+                }
             }
         }
         src_offset += mip_size;
     }
+    mips = out_mips;
     return out;
 }
 
@@ -213,11 +261,12 @@ FileSys::VirtualFile ConvertMiiTextureFile(const FileSys::VirtualFile& file,
         std::memcpy(&width, in.data() + pos + 0x14, sizeof(width));
         std::memcpy(&height, in.data() + pos + 0x16, sizeof(height));
         const u8 format = in[pos + 0x18];
-        const u8 mips = in[pos + 0x19];
+        u8 mips = in[pos + 0x19];
 
         auto converted_texture = ConvertMiiTexture(texture, width, height, format, mips, layout);
         if (converted_texture) {
             texture = std::move(*converted_texture);
+            out[pos + 0x19] = mips;
             ++converted;
         } else {
             ++kept;
