@@ -4,9 +4,13 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include "common/logging.h"
+#include "common/string_util.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/mii/mii.h"
@@ -102,6 +106,18 @@ private:
 
         LOG_INFO(Service_Mii, "called with source_flag={}, mii_count={}", source_flag,
                  *out_mii_count);
+
+        const char* trace = std::getenv("EDEN_NX2_MII_TRACE");
+        if (trace != nullptr && trace[0] != '0') {
+            std::string order;
+            for (u32 i = 0; i < *out_mii_count && i < char_info_element_buffer.size(); ++i) {
+                const auto name = char_info_element_buffer[i].char_info.GetNickname().data;
+                order += fmt::format(
+                    "{}{}={}", i == 0 ? "" : ", ", i,
+                    Common::UTF16ToUTF8(std::u16string_view{name.data(), name.size()}).c_str());
+            }
+            LOG_INFO(Service_Mii, "Mii trace: Get order {}", order);
+        }
 
         R_RETURN(result);
     }
@@ -257,7 +273,32 @@ private:
     Result GetIndex(Out<s32> out_index, const CharInfo& char_info) {
         LOG_DEBUG(Service_Mii, "called");
 
-        R_RETURN(manager->GetIndex(metadata, char_info, *out_index));
+        const Result result = manager->GetIndex(metadata, char_info, *out_index);
+
+        // Experiment: EDEN_NX2_MII_INDEX_OFFSET=<n> shifts the returned index by n, wrapping
+        // around the database. EDEN_NX2_MII_TRACE=1 logs every answer.
+        static const s32 offset = [] {
+            const char* setting = std::getenv("EDEN_NX2_MII_INDEX_OFFSET");
+            return setting != nullptr ? static_cast<s32>(std::strtol(setting, nullptr, 10)) : 0;
+        }();
+        static const bool trace = [] {
+            const char* setting = std::getenv("EDEN_NX2_MII_TRACE");
+            return setting != nullptr && setting[0] != '0';
+        }();
+        const s32 original = *out_index;
+        if (result.IsSuccess() && offset != 0) {
+            const s32 count = static_cast<s32>(manager->GetCount(metadata, SourceFlag::Database));
+            if (count > 0) {
+                *out_index = ((original + offset) % count + count) % count;
+            }
+        }
+        if (trace) {
+            const auto name = char_info.GetNickname().data;
+            LOG_INFO(Service_Mii, "Mii trace: GetIndex {} -> {} (returned {}, result {:#x})",
+                     Common::UTF16ToUTF8(std::u16string_view{name.data(), name.size()}).c_str(),
+                     original, *out_index, result.raw);
+        }
+        R_RETURN(result);
     }
 
     Result SetInterfaceVersion(u32 interface_version) {
