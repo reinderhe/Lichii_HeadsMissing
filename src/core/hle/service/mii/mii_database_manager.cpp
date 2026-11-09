@@ -207,7 +207,7 @@ Result DatabaseManager::FindIndex(const DatabaseSessionMetadata& metadata, u32& 
     // The index refeers to the mii index without special mii.
     // Search on the database until we find it
 
-    for (std::size_t i = 0; i <= index; ++i) {
+    for (std::size_t i = 0; i < index; ++i) {
         const auto& store_data = database.Get(i);
         if (store_data.IsSpecial()) {
             continue;

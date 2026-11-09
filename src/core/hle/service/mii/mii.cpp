@@ -275,28 +275,16 @@ private:
 
         const Result result = manager->GetIndex(metadata, char_info, *out_index);
 
-        // Experiment: EDEN_NX2_MII_INDEX_OFFSET=<n> shifts the returned index by n, wrapping
-        // around the database. EDEN_NX2_MII_TRACE=1 logs every answer.
-        static const s32 offset = [] {
-            const char* setting = std::getenv("EDEN_NX2_MII_INDEX_OFFSET");
-            return setting != nullptr ? static_cast<s32>(std::strtol(setting, nullptr, 10)) : 0;
-        }();
+        // EDEN_NX2_MII_TRACE=1 logs every answer.
         static const bool trace = [] {
             const char* setting = std::getenv("EDEN_NX2_MII_TRACE");
             return setting != nullptr && setting[0] != '0';
         }();
-        const s32 original = *out_index;
-        if (result.IsSuccess() && offset != 0) {
-            const s32 count = static_cast<s32>(manager->GetCount(metadata, SourceFlag::Database));
-            if (count > 0) {
-                *out_index = ((original + offset) % count + count) % count;
-            }
-        }
         if (trace) {
             const auto name = char_info.GetNickname().data;
-            LOG_INFO(Service_Mii, "Mii trace: GetIndex {} -> {} (returned {}, result {:#x})",
+            LOG_INFO(Service_Mii, "Mii trace: GetIndex {} -> {} (result {:#x})",
                      Common::UTF16ToUTF8(std::u16string_view{name.data(), name.size()}).c_str(),
-                     original, *out_index, result.raw);
+                     *out_index, result.raw);
         }
         R_RETURN(result);
     }
