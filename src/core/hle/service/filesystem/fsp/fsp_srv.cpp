@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cstdlib>
 #include <cstring>
@@ -48,10 +49,67 @@
 #include "core/reporter.h"
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
+#include "core/file_sys/vfs/vfs_offset.h"
+#include "core/file_sys/vfs/vfs_vector.h"
 
 namespace Service::FileSystem {
 
 namespace {
+
+// Experiment: Switch 2 titles look for OunceTexture*.dat (Low, Mid and High) in the Mii model
+// archive, which the Switch 1 MiiModel does not have. Rebuild the archive with the Switch 1
+// NXTexture files also served under those names (High uses Mid).
+// EDEN_NX2_MII_OUNCE_ALIAS=0 serves the Switch 1 archive unchanged.
+FileSys::VirtualFile AddOunceTextureAliases(FileSys::VirtualFile data) {
+    static const bool enabled = [] {
+        const char* setting = std::getenv("EDEN_NX2_MII_OUNCE_ALIAS");
+        return setting == nullptr || setting[0] != '0';
+    }();
+    if (!enabled) {
+        return data;
+    }
+    const auto root = FileSys::ExtractRomFS(data);
+    if (root == nullptr) {
+        return data;
+    }
+
+    constexpr std::array<std::pair<const char*, const char*>, 6> aliases{{
+        {"OunceTextureLowLinear.dat", "NXTextureLowLinear.dat"},
+        {"OunceTextureLowSRGB.dat", "NXTextureLowSRGB.dat"},
+        {"OunceTextureMidLinear.dat", "NXTextureMidLinear.dat"},
+        {"OunceTextureMidSRGB.dat", "NXTextureMidSRGB.dat"},
+        {"OunceTextureHighLinear.dat", "NXTextureMidLinear.dat"},
+        {"OunceTextureHighSRGB.dat", "NXTextureMidSRGB.dat"},
+    }};
+
+    std::vector<FileSys::VirtualFile> files = root->GetFiles();
+    std::size_t added = 0;
+    for (const auto& [alias, source_name] : aliases) {
+        if (root->GetFile(alias) != nullptr) {
+            continue;
+        }
+        const auto source = root->GetFile(source_name);
+        if (source == nullptr) {
+            continue;
+        }
+        files.push_back(
+            std::make_shared<FileSys::OffsetVfsFile>(source, source->GetSize(), 0, alias));
+        ++added;
+    }
+    if (added == 0) {
+        return data;
+    }
+
+    auto rebuilt = FileSys::CreateRomFS(std::make_shared<FileSys::VectorVfsDirectory>(
+        std::move(files), root->GetSubdirectories(), "data"));
+    if (rebuilt == nullptr) {
+        LOG_WARNING(Service_FS, "Could not rebuild MiiModel with OunceTexture aliases");
+        return data;
+    }
+    LOG_WARNING(Service_FS, "Serving {} NXTexture files as OunceTexture for the Mii model",
+                added);
+    return rebuilt;
+}
 
 // Diagnostics for the Switch 2 Mii model fallback, off unless their variable is set.
 // EDEN_NX2_MII_TRACE=1 logs the served archive's files and every guest read mapped to a file.
@@ -672,7 +730,8 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
             LOG_WARNING(Service_FS, "Serving MiiModel {:016X} for Switch 2 system data {:016X}",
                         MiiModelId, title_id);
             *out_interface =
-                std::make_shared<IStorage>(system, InstrumentMiiModel(std::move(data)));
+                std::make_shared<IStorage>(
+                    system, InstrumentMiiModel(AddOunceTextureAliases(std::move(data))));
             R_SUCCEED();
         }
         LOG_WARNING(Service_FS, "MiiModel {:016X} is not installed, no fallback for {:016X}",
