@@ -10,9 +10,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <optional>
+#include <span>
+#include <string_view>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <zlib.h>
 
 #include "common/assert.h"
 #include "common/common_types.h"
@@ -56,6 +61,191 @@ namespace Service::FileSystem {
 
 namespace {
 
+// Experiment: re-lays out the textures of a Switch 1 NXTexture file. They are stored
+// block-linear; EDEN_NX2_MII_TEX_LAYOUT picks the layout the OunceTexture copies get:
+// "linear" (default) tightly packed rows, "linear32" rows aligned to 32 bytes with each mip
+// aligned to 512 bytes, "bl" unchanged.
+enum class MiiTexLayout { BlockLinear, Linear, Linear32 };
+
+MiiTexLayout GetMiiTexLayout() {
+    static const MiiTexLayout layout = [] {
+        const char* setting = std::getenv("EDEN_NX2_MII_TEX_LAYOUT");
+        const std::string_view value = setting != nullptr ? setting : "linear";
+        if (value == "bl") {
+            return MiiTexLayout::BlockLinear;
+        }
+        if (value == "linear32") {
+            return MiiTexLayout::Linear32;
+        }
+        return MiiTexLayout::Linear;
+    }();
+    return layout;
+}
+
+constexpr std::size_t DivCeil(std::size_t a, std::size_t b) {
+    return (a + b - 1) / b;
+}
+
+// Byte offset of (x bytes, y rows) inside a block-linear surface of the given GOB block height.
+std::size_t BlockLinearOffset(std::size_t x, std::size_t y, std::size_t gobs_wide,
+                              std::size_t block_height) {
+    const std::size_t block = (y / (8 * block_height)) * gobs_wide + x / 64;
+    const std::size_t gob = (y % (8 * block_height)) / 8;
+    const std::size_t in_gob = ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 +
+                               (y % 2) * 16 + (x % 16);
+    return block * 512 * block_height + gob * 512 + in_gob;
+}
+
+std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 width, u32 height,
+                                                 u8 format, u8 mips, MiiTexLayout layout) {
+    std::size_t bytes_per_block;
+    std::size_t block_dim;
+    switch (format) {
+    case 3:
+        bytes_per_block = 8;
+        block_dim = 4;
+        break;
+    case 4:
+        bytes_per_block = 1;
+        block_dim = 1;
+        break;
+    case 6:
+        bytes_per_block = 16;
+        block_dim = 4;
+        break;
+    default:
+        return std::nullopt;
+    }
+
+    const std::size_t rows0 = DivCeil(height, block_dim);
+    std::size_t block_height0 = 1;
+    while (block_height0 < 16 && block_height0 * 8 < rows0) {
+        block_height0 *= 2;
+    }
+
+    std::vector<u8> out;
+    std::size_t src_offset = 0;
+    for (u8 mip = 0; mip < mips; ++mip) {
+        const std::size_t row_bytes =
+            DivCeil(std::max<u32>(1, width >> mip), block_dim) * bytes_per_block;
+        const std::size_t rows = DivCeil(std::max<u32>(1, height >> mip), block_dim);
+        const std::size_t gobs_wide = DivCeil(row_bytes, 64);
+        const std::size_t gob_rows = DivCeil(rows, 8);
+        std::size_t block_height = block_height0;
+        while (block_height > 1 && block_height / 2 >= gob_rows) {
+            block_height /= 2;
+        }
+        const std::size_t mip_size =
+            gobs_wide * DivCeil(gob_rows, block_height) * block_height * 512;
+        if (src_offset + mip_size > src.size()) {
+            return std::nullopt;
+        }
+
+        const std::size_t pitch =
+            layout == MiiTexLayout::Linear32 ? DivCeil(row_bytes, 32) * 32 : row_bytes;
+        if (layout == MiiTexLayout::Linear32) {
+            out.resize(DivCeil(out.size(), 512) * 512);
+        }
+        const std::size_t base = out.size();
+        out.resize(base + pitch * rows);
+        for (std::size_t y = 0; y < rows; ++y) {
+            for (std::size_t x = 0; x < row_bytes; ++x) {
+                out[base + y * pitch + x] =
+                    src[src_offset + BlockLinearOffset(x, y, gobs_wide, block_height)];
+            }
+        }
+        src_offset += mip_size;
+    }
+    return out;
+}
+
+// Rebuilds an NXTexture file with every texture converted to the requested layout.
+FileSys::VirtualFile ConvertMiiTextureFile(const FileSys::VirtualFile& file,
+                                           const std::string& name) {
+    const auto layout = GetMiiTexLayout();
+    if (layout == MiiTexLayout::BlockLinear) {
+        return std::make_shared<FileSys::OffsetVfsFile>(file, file->GetSize(), 0, name);
+    }
+
+    constexpr std::size_t TableOffset = 0x64;
+    constexpr std::size_t EntrySize = 0x1C;
+    const auto in = file->ReadAllBytes();
+    if (in.size() < TableOffset || std::memcmp(in.data(), "NFTR", 4) != 0) {
+        return nullptr;
+    }
+    const auto read32 = [&in](std::size_t pos) {
+        u32 value;
+        std::memcpy(&value, in.data() + pos, sizeof(value));
+        return value;
+    };
+
+    std::size_t data_start = in.size();
+    for (std::size_t pos = TableOffset; pos + EntrySize <= data_start; pos += EntrySize) {
+        if (read32(pos + 8) != 0) {
+            data_start = std::min<std::size_t>(data_start, read32(pos));
+        }
+    }
+
+    std::vector<u8> out(in.begin(), in.begin() + data_start);
+    std::size_t converted = 0;
+    std::size_t kept = 0;
+    for (std::size_t pos = TableOffset; pos + EntrySize <= data_start; pos += EntrySize) {
+        const u32 offset = read32(pos);
+        const u32 size = read32(pos + 4);
+        const u32 compressed_size = read32(pos + 8);
+        if (compressed_size == 0) {
+            continue;
+        }
+        if (static_cast<std::size_t>(offset) + compressed_size > in.size()) {
+            return nullptr;
+        }
+
+        std::vector<u8> texture(size);
+        uLongf texture_size = size;
+        if (uncompress(texture.data(), &texture_size, in.data() + offset, compressed_size) !=
+                Z_OK ||
+            texture_size != size) {
+            return nullptr;
+        }
+
+        u16 width;
+        u16 height;
+        std::memcpy(&width, in.data() + pos + 0x14, sizeof(width));
+        std::memcpy(&height, in.data() + pos + 0x16, sizeof(height));
+        const u8 format = in[pos + 0x18];
+        const u8 mips = in[pos + 0x19];
+
+        auto converted_texture = ConvertMiiTexture(texture, width, height, format, mips, layout);
+        if (converted_texture) {
+            texture = std::move(*converted_texture);
+            ++converted;
+        } else {
+            ++kept;
+        }
+
+        uLongf packed_size = compressBound(static_cast<uLong>(texture.size()));
+        std::vector<u8> packed(packed_size);
+        if (compress2(packed.data(), &packed_size, texture.data(),
+                      static_cast<uLong>(texture.size()), 6) != Z_OK) {
+            return nullptr;
+        }
+
+        const u32 new_offset = static_cast<u32>(out.size());
+        const u32 new_size = static_cast<u32>(texture.size());
+        const u32 new_compressed_size = static_cast<u32>(packed_size);
+        std::memcpy(out.data() + pos, &new_offset, sizeof(new_offset));
+        std::memcpy(out.data() + pos + 4, &new_size, sizeof(new_size));
+        std::memcpy(out.data() + pos + 8, &new_compressed_size, sizeof(new_compressed_size));
+        out.insert(out.end(), packed.begin(), packed.begin() + packed_size);
+    }
+
+    const u32 total = static_cast<u32>(out.size());
+    std::memcpy(out.data() + 8, &total, sizeof(total));
+    LOG_WARNING(Service_FS, "Mii texture layout: {} converted, {} kept as they were, for {}",
+                converted, kept, name);
+    return std::make_shared<FileSys::VectorVfsFile>(std::move(out), name);
+}
+
 // Experiment: Switch 2 titles look for OunceTexture*.dat (Low, Mid and High) in the Mii model
 // archive, which the Switch 1 MiiModel does not have. Rebuild the archive with the Switch 1
 // NXTexture files also served under those names (High uses Mid).
@@ -92,8 +282,13 @@ FileSys::VirtualFile AddOunceTextureAliases(FileSys::VirtualFile data) {
         if (source == nullptr) {
             continue;
         }
-        files.push_back(
-            std::make_shared<FileSys::OffsetVfsFile>(source, source->GetSize(), 0, alias));
+        auto converted = ConvertMiiTextureFile(source, alias);
+        if (converted == nullptr) {
+            LOG_WARNING(Service_FS, "Could not convert {}, serving it unchanged", source_name);
+            converted =
+                std::make_shared<FileSys::OffsetVfsFile>(source, source->GetSize(), 0, alias);
+        }
+        files.push_back(std::move(converted));
         ++added;
     }
     if (added == 0) {
