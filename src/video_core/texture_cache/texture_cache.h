@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <cstdlib>
 #include <limits>
@@ -2894,6 +2895,33 @@ ImageId TextureCache<P>::InsertImage(const ImageInfo& info, GPUVAddr gpu_addr,
         LOG_DEBUG(HW_GPU, "3D image at {:#x}: {}x{}x{} levels {} format {} block {}x{}x{}",
                  gpu_addr, info.size.width, info.size.height, info.size.depth, info.resources.levels,
                  static_cast<u32>(info.format), info.block.width, info.block.height, info.block.depth);
+    }
+    // EDEN_NX2_MII_TRACE=1: log the layout of images sized like Mii model face part textures.
+    static const bool mii_trace = [] {
+        const char* setting = std::getenv("EDEN_NX2_MII_TRACE");
+        return setting != nullptr && setting[0] != '0';
+    }();
+    if (mii_trace) {
+        static constexpr std::array<std::pair<u32, u32>, 6> mii_sizes{{
+            {76, 64}, {88, 64}, {152, 128}, {176, 128}, {144, 128}, {96, 192}}};
+        static u32 mii_logged = 0;
+        const bool mii_sized =
+            std::ranges::find(mii_sizes, std::pair{info.size.width, info.size.height}) !=
+            mii_sizes.end();
+        if (mii_sized && mii_logged < 300) {
+            ++mii_logged;
+            const bool linear = info.type == ImageType::Linear;
+            LOG_INFO(HW_GPU,
+                     "Mii trace: image {:#x} {}x{} type {} format {} levels {} {} {} "
+                     "spacing {} native {}",
+                     gpu_addr, info.size.width, info.size.height, static_cast<u32>(info.type),
+                     static_cast<u32>(info.format), info.resources.levels,
+                     linear ? "pitch" : "block",
+                     linear ? fmt::format("{}", info.pitch)
+                            : fmt::format("{}x{}x{}", info.block.width, info.block.height,
+                                          info.block.depth),
+                     info.tile_width_spacing, storage_info.native_tiling);
+        }
     }
     const ImageId image_id = JoinImages(storage_info, gpu_addr, *cpu_addr);
     if (!image_id) {
