@@ -4,7 +4,13 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+
 #include "common/common_types.h"
+#include "common/logging.h"
+#include "common/vector_math.h"
 #include "core/core_timing.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
@@ -25,6 +31,53 @@ SixAxis::SixAxis(Core::HID::HIDCore& hid_core_, std::shared_ptr<NPad> npad_)
 }
 
 SixAxis::~SixAxis() = default;
+
+// EDEN_NX2_SIXAXIS_TRACE=1: once a second per controller and motion device, log the mean
+// accelerometer (and its length), mean gyroscope, gyroscope noise, updates and at-rest share.
+void SixAxis::TraceMotion(const Core::Timing::CoreTiming& core_timing, std::size_t index,
+                          const std::array<Core::HID::ControllerMotion, 2>& motion_state) {
+    static const bool enabled = [] {
+        const char* setting = std::getenv("EDEN_NX2_SIXAXIS_TRACE");
+        return setting != nullptr && setting[0] != '0';
+    }();
+    if (!enabled || index >= motion_trace.size()) {
+        return;
+    }
+    const u64 now_ns = static_cast<u64>(core_timing.GetGlobalTimeNs().count());
+    for (std::size_t e = 0; e < motion_state.size() && e < 2; ++e) {
+        auto& t = motion_trace[index][e];
+        const auto& m = motion_state[e];
+        if (t.start_ns == 0) {
+            t.start_ns = now_ns;
+        }
+        t.accel_sum += m.accel;
+        t.gyro_sum += m.gyro;
+        t.gyro_sq_sum += Common::Vec<f32, 3>{m.gyro[0] * m.gyro[0], m.gyro[1] * m.gyro[1],
+                                       m.gyro[2] * m.gyro[2]};
+        t.at_rest += m.is_at_rest ? 1 : 0;
+        ++t.samples;
+        if (now_ns - t.start_ns < 1'000'000'000) {
+            continue;
+        }
+        const f32 n = static_cast<f32>(t.samples);
+        const auto accel = t.accel_sum / n;
+        const auto gyro = t.gyro_sum / n;
+        const auto sq = t.gyro_sq_sum / n;
+        const auto noise = Common::Vec<f32, 3>{std::sqrt(std::max(0.0f, sq[0] - gyro[0] * gyro[0])),
+                                         std::sqrt(std::max(0.0f, sq[1] - gyro[1] * gyro[1])),
+                                         std::sqrt(std::max(0.0f, sq[2] - gyro[2] * gyro[2]))};
+        LOG_INFO(Service_HID,
+                 "Sixaxis trace: npad {} motion {} style {} accel ({:.4f}, {:.4f}, {:.4f}) |{:.4f}| "
+                 "gyro ({:.5f}, {:.5f}, {:.5f}) noise ({:.5f}, {:.5f}, {:.5f}) updates {} "
+                 "at_rest {}%",
+                 index, e, static_cast<u32>(hid_core.GetEmulatedControllerByIndex(index)
+                                                ->GetNpadStyleIndex()),
+                 accel[0], accel[1], accel[2], accel.Length(), gyro[0], gyro[1], gyro[2],
+                 noise[0], noise[1], noise[2], t.samples, t.samples > 0 ? t.at_rest * 100 / t.samples : 0);
+        t = {};
+        t.start_ns = now_ns;
+    }
+}
 
 void SixAxis::OnInit() {}
 void SixAxis::OnRelease() {}
@@ -146,6 +199,8 @@ void SixAxis::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
             default:
                 break;
             }
+
+            TraceMotion(core_timing, i, motion_state);
 
             sixaxis_fullkey_state.sampling_number =
                 sixaxis_fullkey_lifo.lifo.ReadCurrentEntry().state.sampling_number + 1;

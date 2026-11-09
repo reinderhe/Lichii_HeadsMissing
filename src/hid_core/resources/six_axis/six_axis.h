@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <array>
+
 #include "common/common_types.h"
+#include "common/vector_math.h"
 #include "hid_core/hid_types.h"
 #include "hid_core/resources/controller_base.h"
 #include "hid_core/resources/ring_lifo.h"
@@ -11,6 +14,7 @@
 
 namespace Core::HID {
 class EmulatedController;
+struct ControllerMotion;
 } // namespace Core::HID
 
 namespace Service::HID {
@@ -106,7 +110,20 @@ private:
     NpadControllerData& GetControllerFromNpadIdType(Core::HID::NpadIdType npad_id);
     const NpadControllerData& GetControllerFromNpadIdType(Core::HID::NpadIdType npad_id) const;
 
+    struct MotionTrace {
+        u64 start_ns{};
+        Common::Vec<f32, 3> accel_sum{};
+        Common::Vec<f32, 3> gyro_sum{};
+        Common::Vec<f32, 3> gyro_sq_sum{};
+        u32 at_rest{};
+        u32 samples{};
+    };
+
+    void TraceMotion(const Core::Timing::CoreTiming& core_timing, std::size_t index,
+                     const std::array<Core::HID::ControllerMotion, 2>& motion_state);
+
     std::shared_ptr<NPad> npad;
     std::array<NpadControllerData, NPAD_COUNT> controller_data{};
+    std::array<std::array<MotionTrace, 2>, NPAD_COUNT> motion_trace{};
 };
 } // namespace Service::HID
