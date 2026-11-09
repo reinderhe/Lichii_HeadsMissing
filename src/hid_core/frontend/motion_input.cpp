@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
 
 #include "common/math_util.h"
@@ -40,9 +41,23 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
     gyro[1] = std::clamp(gyro[1], -GyroMaxValue, GyroMaxValue);
     gyro[2] = std::clamp(gyro[2], -GyroMaxValue, GyroMaxValue);
 
+    // Experiments for Joy-Con drift and games' own motion calibration:
+    // EDEN_NX2_GYRO_BIAS_RATE=<f> sets how fast the at-rest bias estimate follows the gyroscope
+    // (default 0.0001 per sample); EDEN_NX2_GYRO_DEADZONE=0 passes gyroscope values below the
+    // threshold on instead of zeroing them.
+    static const f32 bias_rate = [] {
+        const char* setting = std::getenv("EDEN_NX2_GYRO_BIAS_RATE");
+        const f32 value = setting != nullptr ? std::strtof(setting, nullptr) : 0.0f;
+        return value > 0.0f && value < 1.0f ? value : 0.0001f;
+    }();
+    static const bool deadzone = [] {
+        const char* setting = std::getenv("EDEN_NX2_GYRO_DEADZONE");
+        return setting == nullptr || setting[0] != '0';
+    }();
+
     // Auto adjust gyro_bias to minimize drift
     if (!IsMoving(IsAtRestRelaxed)) {
-        gyro_bias = (gyro_bias * 0.9999f) + (gyroscope * 0.0001f);
+        gyro_bias = (gyro_bias * (1.0f - bias_rate)) + (gyroscope * bias_rate);
     }
 
     // Adjust drift when calibration mode is enabled
@@ -51,7 +66,7 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
         StopCalibration();
     }
 
-    if (gyro.Length() < gyro_threshold * user_gyro_threshold) {
+    if (deadzone && gyro.Length() < gyro_threshold * user_gyro_threshold) {
         gyro = {};
     } else {
         only_accelerometer = false;
