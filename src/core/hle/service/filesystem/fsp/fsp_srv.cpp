@@ -64,13 +64,18 @@ namespace {
 // Experiment: re-lays out the textures of a Switch 1 NXTexture file, which are stored
 // block-linear with the NVN block height rules. EDEN_NX2_MII_TEX_LAYOUT picks what the
 // OunceTexture copies get:
-//   "bl1" (default) block-linear level 0 only, mip count set to 1
+//   "native" (default) every level, converted to the Switch 2 GOB layout, which swaps the
+//                  second and third 32-byte chunks of every 128 bytes
+//   "native1"       the same, level 0 only with the mip count set to 1
+//   "bl1"           block-linear level 0 only, mip count set to 1
 //   "blkeep"        block-linear, every mip keeps level 0's block height
 //   "blone"         block-linear, block height 1 for every mip
 //   "bl"            unchanged
 //   "linear"        tightly packed rows
 //   "linear32"      rows aligned to 32 bytes, each mip aligned to 512 bytes
 enum class MiiTexLayout {
+    Native,
+    NativeLevel0,
     BlockLinear,
     BlockLinearLevel0,
     BlockLinearKeep,
@@ -82,7 +87,13 @@ enum class MiiTexLayout {
 MiiTexLayout GetMiiTexLayout() {
     static const MiiTexLayout layout = [] {
         const char* setting = std::getenv("EDEN_NX2_MII_TEX_LAYOUT");
-        const std::string_view value = setting != nullptr ? setting : "bl1";
+        const std::string_view value = setting != nullptr ? setting : "native";
+        if (value == "native1") {
+            return MiiTexLayout::NativeLevel0;
+        }
+        if (value == "bl1") {
+            return MiiTexLayout::BlockLinearLevel0;
+        }
         if (value == "bl") {
             return MiiTexLayout::BlockLinear;
         }
@@ -98,7 +109,7 @@ MiiTexLayout GetMiiTexLayout() {
         if (value == "linear32") {
             return MiiTexLayout::Linear32;
         }
-        return MiiTexLayout::BlockLinearLevel0;
+        return MiiTexLayout::Native;
     }();
     return layout;
 }
@@ -148,7 +159,10 @@ std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 wi
     while (block_height0 < 16 && block_height0 * 8 < rows0) {
         block_height0 *= 2;
     }
-    const u8 out_mips = layout == MiiTexLayout::BlockLinearLevel0 ? u8{1} : mips;
+    const bool level0_only =
+        layout == MiiTexLayout::BlockLinearLevel0 || layout == MiiTexLayout::NativeLevel0;
+    const u8 out_mips = level0_only ? u8{1} : mips;
+    const bool native = layout == MiiTexLayout::Native || layout == MiiTexLayout::NativeLevel0;
 
     std::vector<u8> out;
     std::size_t src_offset = 0;
@@ -187,7 +201,9 @@ std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 wi
             }
         } else {
             std::size_t out_block_height = block_height;
-            if (layout == MiiTexLayout::BlockLinearKeep) {
+            if (native) {
+                // Same layout as the source; the GOB conversion runs once the levels are copied.
+            } else if (layout == MiiTexLayout::BlockLinearKeep) {
                 out_block_height = block_height0;
             } else if (layout == MiiTexLayout::BlockLinearOne) {
                 out_block_height = 1;
@@ -202,6 +218,12 @@ std::optional<std::vector<u8>> ConvertMiiTexture(std::span<const u8> src, u32 wi
             }
         }
         src_offset += mip_size;
+    }
+    if (native) {
+        for (std::size_t group = 0; group + 128 <= out.size(); group += 128) {
+            std::swap_ranges(out.begin() + group + 32, out.begin() + group + 64,
+                             out.begin() + group + 64);
+        }
     }
     mips = out_mips;
     return out;
