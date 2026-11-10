@@ -73,7 +73,7 @@ BOOL CALLBACK AcceptAuthentication(LPVOID, PBLUETOOTH_AUTHENTICATION_CALLBACK_PA
 
 void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
     if (info.fRemembered) {
-        // Windows keeps a pairing the controller no longer accepts; start over like a new device.
+        // Without a bond the pairing can't reconnect anyway; start over like a new device.
         const DWORD removed = BluetoothRemoveDevice(&info.Address);
         LOG_INFO(Input, "Joycon pairing: removed stale pairing, result={}", removed);
         info.fRemembered = FALSE;
@@ -179,7 +179,10 @@ void PairDiscoverableControllers() {
         HBLUETOOTH_DEVICE_FIND device_find = BluetoothFindFirstDevice(&search, &info);
         if (device_find != nullptr) {
             do {
-                if (IsSwitchController(info) && !info.fConnected && SeenRecently(info)) {
+                // A controller trying to reconnect by itself also counts as recently seen, so
+                // never touch a bonded pairing: that one can still reconnect.
+                if (IsSwitchController(info) && !info.fConnected && !info.fAuthenticated &&
+                    SeenRecently(info)) {
                     Pair(radio, info);
                 }
                 info = {};
