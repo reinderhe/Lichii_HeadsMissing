@@ -59,6 +59,8 @@ else()
         drivers/joycon.h
         drivers/sdl_driver.cpp
         drivers/sdl_driver.h
+        helpers/joycon_bluetooth_win.cpp
+        helpers/joycon_bluetooth_win.h
         helpers/joycon_driver.cpp
         helpers/joycon_driver.h
         helpers/joycon_protocol/calibration.cpp
@@ -82,6 +84,9 @@ else()
 
     target_link_libraries(input_common PRIVATE SDL3::SDL3)
     target_compile_definitions(input_common PRIVATE HAVE_SDL3)
+    if (WIN32)
+        target_link_libraries(input_common PRIVATE bthprops)
+    endif()
 endif()
 
 if (ENABLE_LIBUSB)

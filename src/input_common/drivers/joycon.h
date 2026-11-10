@@ -80,6 +80,9 @@ private:
     /// Returns true if device is valid and not registered
     bool IsDeviceNew(SDL_hid_device_info* device_info) const;
 
+    /// Returns true when a Pro Controller or a left and a right Joy-Con are connected
+    bool HasFullSet() const;
+
     /// Tries to connect to the new device
     void RegisterNewDevice(SDL_hid_device_info* device_info);
 

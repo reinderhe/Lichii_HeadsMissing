@@ -6,6 +6,7 @@
 
 #include <fmt/ranges.h>
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "common/param_package.h"
@@ -14,6 +15,7 @@
 #include "common/settings.h"
 #include "common/thread.h"
 #include "input_common/drivers/joycon.h"
+#include "input_common/helpers/joycon_bluetooth_win.h"
 #include "input_common/helpers/joycon_driver.h"
 #include "input_common/helpers/joycon_protocol/joycon_types.h"
 
@@ -36,6 +38,11 @@ Joycons::Joycons(const std::string& input_engine_) : InputEngine(input_engine_) 
 namespace {
 // Turning the controllers off when the emulator closes lets them reconnect with a button press
 // next time. EDEN_JOYCON_POWER_OFF=0 keeps them connected instead.
+bool AutoPairEnabled() {
+    const char* setting = std::getenv("EDEN_JOYCON_AUTO_PAIR");
+    return setting == nullptr || setting[0] != '0';
+}
+
 bool PowerOffOnExit() {
     const char* setting = std::getenv("EDEN_JOYCON_POWER_OFF");
     return setting == nullptr || setting[0] != '0';
@@ -108,7 +115,22 @@ void Joycons::ScanThread(std::stop_token stop_token) {
         }
 
         SDL_hid_free_enumeration(devs);
+
+        // Like Dolphin's continuous scanning: pair controllers whose sync button was pressed.
+        // The Bluetooth inquiry can add input lag, so it stops once a full set is connected.
+        if (AutoPairEnabled() && !HasFullSet() && !stop_token.stop_requested()) {
+            Joycon::PairDiscoverableControllers();
+        }
     } while (Common::StoppableTimedWait(stop_token, std::chrono::seconds{5}));
+}
+
+bool Joycons::HasFullSet() const {
+    const auto connected = [](const auto& devices) {
+        return std::ranges::any_of(devices, [](const auto& device) {
+            return device && device->IsConnected();
+        });
+    };
+    return connected(pro_controller) || (connected(left_joycons) && connected(right_joycons));
 }
 
 bool Joycons::IsDeviceNew(SDL_hid_device_info* device_info) const {
