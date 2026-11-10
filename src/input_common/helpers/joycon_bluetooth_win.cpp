@@ -33,8 +33,7 @@ bool SeenRecently(const BLUETOOTH_DEVICE_INFO& info) {
     FILETIME now_ft{};
     SYSTEMTIME now{};
     GetSystemTime(&now);
-    if (!SystemTimeToFileTime(&info.stLastSeen, &seen_ft) ||
-        !SystemTimeToFileTime(&now, &now_ft)) {
+    if (!SystemTimeToFileTime(&info.stLastSeen, &seen_ft) || !SystemTimeToFileTime(&now, &now_ft)) {
         return false;
     }
     ULARGE_INTEGER seen{}, current{};
@@ -43,9 +42,8 @@ bool SeenRecently(const BLUETOOTH_DEVICE_INFO& info) {
     current.LowPart = now_ft.dwLowDateTime;
     current.HighPart = now_ft.dwHighDateTime;
     constexpr ULONGLONG Window = 30ULL * 10'000'000ULL; // 30 s in 100 ns units
-    const ULONGLONG diff =
-        current.QuadPart > seen.QuadPart ? current.QuadPart - seen.QuadPart
-                                         : seen.QuadPart - current.QuadPart;
+    const ULONGLONG diff = current.QuadPart > seen.QuadPart ? current.QuadPart - seen.QuadPart
+                                                            : seen.QuadPart - current.QuadPart;
     return diff < Window;
 }
 
@@ -84,8 +82,8 @@ void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
 
     HBLUETOOTH_AUTHENTICATION_REGISTRATION registration = nullptr;
     BluetoothRegisterForAuthenticationEx(&info, &registration, AcceptAuthentication, nullptr);
-    const DWORD authenticated =
-        BluetoothAuthenticateDeviceEx(nullptr, radio, &info, nullptr, MITMProtectionNotRequired);
+    const DWORD authenticated = BluetoothAuthenticateDeviceEx(nullptr, radio, &info, nullptr,
+                                                              MITMProtectionNotRequiredBonding);
     if (registration != nullptr) {
         BluetoothUnregisterAuthentication(registration);
     }
@@ -94,8 +92,10 @@ void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
     GUID hid_service{0x00001124, 0x0000, 0x1000, {0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB}};
     const DWORD enabled =
         BluetoothSetServiceState(radio, &info, &hid_service, BLUETOOTH_SERVICE_ENABLE);
-    LOG_INFO(Input, "Joycon pairing: paired '{}', authenticate={} hid_service={}",
-             Common::UTF16ToUTF8(info.szName), authenticated, enabled);
+    // Without a stored link key Windows turns the controller away when it reconnects by itself.
+    BluetoothGetDeviceInfo(radio, &info);
+    LOG_INFO(Input, "Joycon pairing: paired '{}', authenticate={} hid_service={} bonded={}",
+             Common::UTF16ToUTF8(info.szName), authenticated, enabled, info.fAuthenticated != 0);
 }
 
 std::string DescribeAddress(const BLUETOOTH_ADDRESS& address) {
@@ -106,9 +106,8 @@ std::string DescribeAddress(const BLUETOOTH_ADDRESS& address) {
 
 } // namespace
 
-void CheckPairedControllers(bool trace, bool reenable_hid) {
+void TracePairedControllers() {
     static std::string last_state;
-    static std::set<ULONGLONG> reenabled;
 
     BLUETOOTH_FIND_RADIO_PARAMS radio_params{sizeof(radio_params)};
     HANDLE radio = nullptr;
@@ -117,7 +116,7 @@ void CheckPairedControllers(bool trace, bool reenable_hid) {
         return;
     }
 
-    std::string state;
+    std::set<std::string> controllers;
     do {
         BLUETOOTH_DEVICE_SEARCH_PARAMS search{};
         search.dwSize = sizeof(search);
@@ -132,23 +131,10 @@ void CheckPairedControllers(bool trace, bool reenable_hid) {
         if (device_find != nullptr) {
             do {
                 if (IsSwitchController(info)) {
-                    state += fmt::format(" [{} {} remembered={} authenticated={} connected={}]",
-                                         Common::UTF16ToUTF8(info.szName),
-                                         DescribeAddress(info.Address), info.fRemembered != 0,
-                                         info.fAuthenticated != 0, info.fConnected != 0);
-                    if (reenable_hid && info.fRemembered && !info.fConnected &&
-                        reenabled.insert(info.Address.ullLong).second) {
-                        // Reinstalls Windows' HID driver for the controller so it accepts the
-                        // controller reconnecting by itself again.
-                        GUID hid_service{0x00001124, 0x0000, 0x1000,
-                                         {0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB}};
-                        const DWORD disabled = BluetoothSetServiceState(
-                            radio, &info, &hid_service, BLUETOOTH_SERVICE_DISABLE);
-                        const DWORD enabled = BluetoothSetServiceState(
-                            radio, &info, &hid_service, BLUETOOTH_SERVICE_ENABLE);
-                        LOG_INFO(Input, "Joycon pairing: re-enabled HID for '{}', disable={} enable={}",
-                                 Common::UTF16ToUTF8(info.szName), disabled, enabled);
-                    }
+                    controllers.insert(fmt::format(
+                        " [{} {} remembered={} authenticated={} connected={}]",
+                        Common::UTF16ToUTF8(info.szName), DescribeAddress(info.Address),
+                        info.fRemembered != 0, info.fAuthenticated != 0, info.fConnected != 0));
                 }
                 info = {};
                 info.dwSize = sizeof(info);
@@ -159,7 +145,11 @@ void CheckPairedControllers(bool trace, bool reenable_hid) {
     } while (BluetoothFindNextRadio(radio_find, &radio));
     BluetoothFindRadioClose(radio_find);
 
-    if (trace && state != last_state) {
+    std::string state;
+    for (const auto& controller : controllers) {
+        state += controller;
+    }
+    if (state != last_state) {
         LOG_INFO(Input, "Joycon bluetooth state:{}", state.empty() ? " none" : state);
         last_state = state;
     }
@@ -208,7 +198,7 @@ void PairDiscoverableControllers() {
 
 namespace InputCommon::Joycon {
 void PairDiscoverableControllers() {}
-void CheckPairedControllers(bool, bool) {}
+void TracePairedControllers() {}
 } // namespace InputCommon::Joycon
 
 #endif

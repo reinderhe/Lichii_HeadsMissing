@@ -48,16 +48,6 @@ bool TraceEnabled() {
     return enabled;
 }
 
-// Experiment: EDEN_JOYCON_REENABLE_HID=1 reinstalls the HID driver of paired, disconnected
-// controllers once per session.
-bool ReenableHidEnabled() {
-    static const bool enabled = [] {
-        const char* setting = std::getenv("EDEN_JOYCON_REENABLE_HID");
-        return setting != nullptr && setting[0] == '1';
-    }();
-    return enabled;
-}
-
 bool AutoPairEnabled() {
     const char* setting = std::getenv("EDEN_JOYCON_AUTO_PAIR");
     return setting == nullptr || setting[0] != '0';
@@ -149,8 +139,8 @@ void Joycons::ScanThread(std::stop_token stop_token) {
             last_seen = seen;
         }
 
-        if (TraceEnabled() || ReenableHidEnabled()) {
-            Joycon::CheckPairedControllers(TraceEnabled(), ReenableHidEnabled());
+        if (TraceEnabled()) {
+            Joycon::TracePairedControllers();
         }
 
         // Like Dolphin's continuous scanning: pair controllers whose sync button was pressed.
