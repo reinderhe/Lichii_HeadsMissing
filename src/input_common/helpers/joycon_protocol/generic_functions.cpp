@@ -29,6 +29,13 @@ Common::Input::DriverResult GenericProtocol::SetLowPowerMode(bool enable) {
     return SendSubCommand(SubCommand::LOW_POWER_MODE, buffer);
 }
 
+Common::Input::DriverResult GenericProtocol::PowerOff() {
+    ScopedSetBlocking sb(this);
+    // HCI state 0: disconnect and sleep. The controller drops the link, so there is no reply.
+    const std::array<u8, 1> buffer{0x00};
+    return SendSubCommandNoReply(SubCommand::SET_HCI_STATE, buffer);
+}
+
 Common::Input::DriverResult GenericProtocol::TriggersElapsed() {
     ScopedSetBlocking sb(this);
     return SendSubCommand(SubCommand::TRIGGERS_ELAPSED, {});

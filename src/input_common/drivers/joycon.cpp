@@ -6,6 +6,8 @@
 
 #include <fmt/ranges.h>
 
+#include <cstdlib>
+
 #include "common/param_package.h"
 #include <ranges>
 #include "common/polyfill_thread.h"
@@ -31,6 +33,15 @@ Joycons::Joycons(const std::string& input_engine_) : InputEngine(input_engine_) 
     }
 }
 
+namespace {
+// Turning the controllers off when the emulator closes lets them reconnect with a button press
+// next time. EDEN_JOYCON_POWER_OFF=0 keeps them connected instead.
+bool PowerOffOnExit() {
+    const char* setting = std::getenv("EDEN_JOYCON_POWER_OFF");
+    return setting == nullptr || setting[0] != '0';
+}
+} // namespace
+
 Joycons::~Joycons() {
     Reset();
 }
@@ -41,19 +52,19 @@ void Joycons::Reset() {
         if (!device) {
             continue;
         }
-        device->Stop();
+        PowerOffOnExit() ? device->PowerOff() : device->Stop();
     }
     for (const auto& device : right_joycons) {
         if (!device) {
             continue;
         }
-        device->Stop();
+        PowerOffOnExit() ? device->PowerOff() : device->Stop();
     }
     for (const auto& device : pro_controller) {
         if (!device) {
             continue;
         }
-        device->Stop();
+        PowerOffOnExit() ? device->PowerOff() : device->Stop();
     }
     SDL_hid_exit();
 }

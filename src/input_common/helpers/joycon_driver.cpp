@@ -32,6 +32,17 @@ void JoyconDriver::Stop() {
     input_thread = {};
 }
 
+void JoyconDriver::PowerOff() {
+    const bool was_connected = is_connected.load();
+    Stop();
+    std::scoped_lock lock{mutex};
+    if (!was_connected || hidapi_handle->handle == nullptr || !generic_protocol) {
+        return;
+    }
+    const auto result = generic_protocol->PowerOff();
+    LOG_INFO(Input, "Joycon on port {} turned off, result={}", port, static_cast<int>(result));
+}
+
 Common::Input::DriverResult JoyconDriver::RequestDeviceAccess(SDL_hid_device_info* device_info) {
     std::scoped_lock lock{mutex};
 

@@ -34,6 +34,8 @@ public:
     Common::Input::DriverResult RequestDeviceAccess(SDL_hid_device_info* device_info);
     Common::Input::DriverResult InitializeDevice();
     void Stop();
+    /// Stops the driver and turns the controller off
+    void PowerOff();
 
     bool IsConnected() const;
     bool IsVibrationEnabled() const;

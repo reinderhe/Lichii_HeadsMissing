@@ -115,5 +115,11 @@ public:
      * @returns bit flag containing the led state
      */
     Common::Input::DriverResult SetLedBlinkPattern(u8 leds);
+
+    /**
+     * Disconnects the controller and puts it to sleep. Pressing a button wakes it and makes it
+     * reconnect to the last paired host.
+     */
+    Common::Input::DriverResult PowerOff();
 };
 } // namespace InputCommon::Joycon

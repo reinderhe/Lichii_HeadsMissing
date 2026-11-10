@@ -120,6 +120,23 @@ Common::Input::DriverResult JoyconCommonProtocol::SendSubCommand(SubCommand sc,
     return SendSubCommand(sc, buffer, output);
 }
 
+Common::Input::DriverResult JoyconCommonProtocol::SendSubCommandNoReply(
+    SubCommand sc, std::span<const u8> buffer) {
+    SubCommandPacket packet{
+        .output_report = OutputReport::RUMBLE_AND_SUBCMD,
+        .packet_counter = GetCounter(),
+        .sub_command = sc,
+        .command_data = {},
+    };
+
+    if (buffer.size() > packet.command_data.size()) {
+        return Common::Input::DriverResult::InvalidParameters;
+    }
+
+    memcpy(packet.command_data.data(), buffer.data(), buffer.size());
+    return SendData(packet);
+}
+
 Common::Input::DriverResult JoyconCommonProtocol::SendMCUCommand(SubCommand sc,
                                                                  std::span<const u8> buffer) {
     SubCommandPacket packet{

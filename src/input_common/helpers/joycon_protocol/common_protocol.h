@@ -92,6 +92,13 @@ public:
     Common::Input::DriverResult SendSubCommand(SubCommand sc, std::span<const u8> buffer);
 
     /**
+     * Sends a sub command to the device without waiting for a reply
+     * @param sc sub command to be send
+     * @param buffer data to be send
+     */
+    Common::Input::DriverResult SendSubCommandNoReply(SubCommand sc, std::span<const u8> buffer);
+
+    /**
      * Sends a mcu command to the device
      * @param sc sub command to be send
      * @param buffer data to be send
