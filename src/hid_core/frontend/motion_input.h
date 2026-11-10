@@ -116,6 +116,13 @@ private:
 
     // Used to auto disable calibration mode
     std::size_t calibration_counter = 0;
+
+    // Experiments: sequential samples the device has been truly still, the previous raw
+    // accelerometer sample and the at-rest gravity magnitude estimate
+    u32 still_samples = 0;
+    Common::Vec<f32, 3> raw_accel{};
+    Common::Vec<f32, 3> prev_raw_accel{};
+    f32 accel_norm = 0.0f;
 };
 
 } // namespace Core::HID

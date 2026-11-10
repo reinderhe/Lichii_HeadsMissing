@@ -13,6 +13,10 @@
 
 namespace Core::HID {
 
+namespace {
+constexpr f32 DefaultBiasRate = 0.0001f;
+} // namespace
+
 MotionInput::MotionInput() {
     // Initialize PID constants with default values
     SetPID(0.3f, 0.005f, 0.0f);
@@ -28,7 +32,27 @@ void MotionInput::SetPID(f32 new_kp, f32 new_ki, f32 new_kd) {
 }
 
 void MotionInput::SetAcceleration(const Common::Vec<f32, 3>& acceleration) {
+    // Experiment: EDEN_NX2_ACCEL_NORMALIZE=1 scales the accelerometer so gravity measures 1 g
+    // while the device is still, for sensors whose scale is a few percent off.
+    static const bool normalize = [] {
+        const char* setting = std::getenv("EDEN_NX2_ACCEL_NORMALIZE");
+        return setting != nullptr && setting[0] == '1';
+    }();
+
+    prev_raw_accel = raw_accel;
+    raw_accel = acceleration;
     accel = acceleration;
+    if (normalize) {
+        const f32 length = acceleration.Length();
+        if (accel_norm == 0.0f && length > 0.5f && length < 1.5f) {
+            accel_norm = length;
+        } else if (still_samples >= 60 && length > 0.5f && length < 1.5f) {
+            accel_norm = (accel_norm * 0.99f) + (length * 0.01f);
+        }
+        if (accel_norm > 0.0f) {
+            accel = acceleration / accel_norm;
+        }
+    }
     accel[0] = std::clamp(accel[0], -AccelMaxValue, AccelMaxValue);
     accel[1] = std::clamp(accel[1], -AccelMaxValue, AccelMaxValue);
     accel[2] = std::clamp(accel[2], -AccelMaxValue, AccelMaxValue);
@@ -42,22 +66,29 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
     gyro[2] = std::clamp(gyro[2], -GyroMaxValue, GyroMaxValue);
 
     // Experiments for Joy-Con drift and games' own motion calibration:
-    // EDEN_NX2_GYRO_BIAS_RATE=<f> sets how fast the at-rest bias estimate follows the gyroscope
-    // (default 0.0001 per sample); EDEN_NX2_GYRO_DEADZONE=0 passes gyroscope values below the
+    // EDEN_NX2_GYRO_BIAS_RATE=<f> sets how fast the bias estimate follows the gyroscope once the
+    // device has been truly still for 60 samples (otherwise the default 0.0001 per sample applies
+    // while roughly at rest); EDEN_NX2_GYRO_DEADZONE=0 passes gyroscope values below the
     // threshold on instead of zeroing them.
     static const f32 bias_rate = [] {
         const char* setting = std::getenv("EDEN_NX2_GYRO_BIAS_RATE");
         const f32 value = setting != nullptr ? std::strtof(setting, nullptr) : 0.0f;
-        return value > 0.0f && value < 1.0f ? value : 0.0001f;
+        return value > 0.0f && value < 1.0f ? value : DefaultBiasRate;
     }();
     static const bool deadzone = [] {
         const char* setting = std::getenv("EDEN_NX2_GYRO_DEADZONE");
         return setting == nullptr || setting[0] != '0';
     }();
 
+    const bool still = (gyroscope - gyro_bias).Length() < IsAtRestStandard &&
+                       (raw_accel - prev_raw_accel).Length() < 0.01f;
+    still_samples = still ? still_samples + 1 : 0;
+
     // Auto adjust gyro_bias to minimize drift
-    if (!IsMoving(IsAtRestRelaxed)) {
+    if (still_samples >= 60) {
         gyro_bias = (gyro_bias * (1.0f - bias_rate)) + (gyroscope * bias_rate);
+    } else if (!IsMoving(IsAtRestRelaxed)) {
+        gyro_bias = (gyro_bias * (1.0f - DefaultBiasRate)) + (gyroscope * DefaultBiasRate);
     }
 
     // Adjust drift when calibration mode is enabled
