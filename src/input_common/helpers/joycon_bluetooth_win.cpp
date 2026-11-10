@@ -6,11 +6,15 @@
 #ifdef _WIN32
 
 #include <cwchar>
+#include <set>
+#include <string>
 
 // clang-format off
 #include <windows.h>
 #include <bluetoothapis.h>
 // clang-format on
+
+#include <fmt/format.h>
 
 #include "common/logging.h"
 #include "common/string_util.h"
@@ -94,7 +98,72 @@ void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
              Common::UTF16ToUTF8(info.szName), authenticated, enabled);
 }
 
+std::string DescribeAddress(const BLUETOOTH_ADDRESS& address) {
+    return fmt::format("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", address.rgBytes[5],
+                       address.rgBytes[4], address.rgBytes[3], address.rgBytes[2],
+                       address.rgBytes[1], address.rgBytes[0]);
+}
+
 } // namespace
+
+void CheckPairedControllers(bool trace, bool reenable_hid) {
+    static std::string last_state;
+    static std::set<ULONGLONG> reenabled;
+
+    BLUETOOTH_FIND_RADIO_PARAMS radio_params{sizeof(radio_params)};
+    HANDLE radio = nullptr;
+    HBLUETOOTH_RADIO_FIND radio_find = BluetoothFindFirstRadio(&radio_params, &radio);
+    if (radio_find == nullptr) {
+        return;
+    }
+
+    std::string state;
+    do {
+        BLUETOOTH_DEVICE_SEARCH_PARAMS search{};
+        search.dwSize = sizeof(search);
+        search.fReturnAuthenticated = TRUE;
+        search.fReturnRemembered = TRUE;
+        search.fReturnConnected = TRUE;
+        search.hRadio = radio;
+
+        BLUETOOTH_DEVICE_INFO info{};
+        info.dwSize = sizeof(info);
+        HBLUETOOTH_DEVICE_FIND device_find = BluetoothFindFirstDevice(&search, &info);
+        if (device_find != nullptr) {
+            do {
+                if (IsSwitchController(info)) {
+                    state += fmt::format(" [{} {} remembered={} authenticated={} connected={}]",
+                                         Common::UTF16ToUTF8(info.szName),
+                                         DescribeAddress(info.Address), info.fRemembered != 0,
+                                         info.fAuthenticated != 0, info.fConnected != 0);
+                    if (reenable_hid && info.fRemembered && !info.fConnected &&
+                        reenabled.insert(info.Address.ullLong).second) {
+                        // Reinstalls Windows' HID driver for the controller so it accepts the
+                        // controller reconnecting by itself again.
+                        GUID hid_service{0x00001124, 0x0000, 0x1000,
+                                         {0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB}};
+                        const DWORD disabled = BluetoothSetServiceState(
+                            radio, &info, &hid_service, BLUETOOTH_SERVICE_DISABLE);
+                        const DWORD enabled = BluetoothSetServiceState(
+                            radio, &info, &hid_service, BLUETOOTH_SERVICE_ENABLE);
+                        LOG_INFO(Input, "Joycon pairing: re-enabled HID for '{}', disable={} enable={}",
+                                 Common::UTF16ToUTF8(info.szName), disabled, enabled);
+                    }
+                }
+                info = {};
+                info.dwSize = sizeof(info);
+            } while (BluetoothFindNextDevice(device_find, &info));
+            BluetoothFindDeviceClose(device_find);
+        }
+        CloseHandle(radio);
+    } while (BluetoothFindNextRadio(radio_find, &radio));
+    BluetoothFindRadioClose(radio_find);
+
+    if (trace && state != last_state) {
+        LOG_INFO(Input, "Joycon bluetooth state:{}", state.empty() ? " none" : state);
+        last_state = state;
+    }
+}
 
 void PairDiscoverableControllers() {
     BLUETOOTH_FIND_RADIO_PARAMS radio_params{sizeof(radio_params)};
@@ -139,6 +208,7 @@ void PairDiscoverableControllers() {
 
 namespace InputCommon::Joycon {
 void PairDiscoverableControllers() {}
+void CheckPairedControllers(bool, bool) {}
 } // namespace InputCommon::Joycon
 
 #endif

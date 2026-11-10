@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <string>
 
 #include "common/param_package.h"
 #include <ranges>
@@ -38,6 +39,25 @@ Joycons::Joycons(const std::string& input_engine_) : InputEngine(input_engine_) 
 namespace {
 // Turning the controllers off when the emulator closes lets them reconnect with a button press
 // next time. EDEN_JOYCON_POWER_OFF=0 keeps them connected instead.
+// EDEN_JOYCON_TRACE=1 logs the controllers SDL and Windows report whenever that changes.
+bool TraceEnabled() {
+    static const bool enabled = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_TRACE");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    return enabled;
+}
+
+// Experiment: EDEN_JOYCON_REENABLE_HID=1 reinstalls the HID driver of paired, disconnected
+// controllers once per session.
+bool ReenableHidEnabled() {
+    static const bool enabled = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_REENABLE_HID");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    return enabled;
+}
+
 bool AutoPairEnabled() {
     const char* setting = std::getenv("EDEN_JOYCON_AUTO_PAIR");
     return setting == nullptr || setting[0] != '0';
@@ -100,12 +120,21 @@ void Joycons::Setup() {
 void Joycons::ScanThread(std::stop_token stop_token) {
     constexpr u16 nintendo_vendor_id = 0x057e;
     Common::SetCurrentThreadName("JoyconScanThread");
+    std::string last_seen;
 
     do {
         SDL_hid_device_info* devs = SDL_hid_enumerate(nintendo_vendor_id, 0x0);
         SDL_hid_device_info* cur_dev = devs;
+        std::string seen;
 
         while (cur_dev) {
+            if (TraceEnabled()) {
+                std::string serial;
+                for (const wchar_t* c = cur_dev->serial_number; c != nullptr && *c != 0; ++c) {
+                    serial += static_cast<char>(*c);
+                }
+                seen += fmt::format(" [{:04X} {}]", cur_dev->product_id, serial);
+            }
             if (IsDeviceNew(cur_dev)) {
                 LOG_DEBUG(Input, "Device Found,type : {:04X} {:04X}", cur_dev->vendor_id,
                           cur_dev->product_id);
@@ -115,13 +144,21 @@ void Joycons::ScanThread(std::stop_token stop_token) {
         }
 
         SDL_hid_free_enumeration(devs);
+        if (TraceEnabled() && seen != last_seen) {
+            LOG_INFO(Input, "Joycon HID devices:{}", seen.empty() ? " none" : seen);
+            last_seen = seen;
+        }
+
+        if (TraceEnabled() || ReenableHidEnabled()) {
+            Joycon::CheckPairedControllers(TraceEnabled(), ReenableHidEnabled());
+        }
 
         // Like Dolphin's continuous scanning: pair controllers whose sync button was pressed.
         // The Bluetooth inquiry can add input lag, so it stops once a full set is connected.
         if (AutoPairEnabled() && !HasFullSet() && !stop_token.stop_requested()) {
             Joycon::PairDiscoverableControllers();
         }
-    } while (Common::StoppableTimedWait(stop_token, std::chrono::seconds{5}));
+    } while (Common::StoppableTimedWait(stop_token, std::chrono::seconds{TraceEnabled() ? 1 : 5}));
 }
 
 bool Joycons::HasFullSet() const {

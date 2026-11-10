@@ -12,4 +12,11 @@ namespace InputCommon::Joycon {
  */
 void PairDiscoverableControllers();
 
+/**
+ * Checks the controllers Windows has paired without scanning. With trace set, logs their state
+ * whenever it changes; with reenable_hid set, reinstalls the HID driver once per session for each
+ * paired controller that isn't connected.
+ */
+void CheckPairedControllers(bool trace, bool reenable_hid);
+
 } // namespace InputCommon::Joycon
