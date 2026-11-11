@@ -73,7 +73,7 @@ BOOL CALLBACK AcceptAuthentication(LPVOID, PBLUETOOTH_AUTHENTICATION_CALLBACK_PA
 
 void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
     if (info.fRemembered) {
-        // Without a bond the pairing can't reconnect anyway; start over like a new device.
+        // Windows can't use a controller that reconnects by itself; start over like a new device.
         const DWORD removed = BluetoothRemoveDevice(&info.Address);
         LOG_INFO(Input, "Joycon pairing: removed stale pairing, result={}", removed);
         info.fRemembered = FALSE;
@@ -86,6 +86,13 @@ void Pair(HANDLE radio, BLUETOOTH_DEVICE_INFO& info) {
                                                               MITMProtectionNotRequiredBonding);
     if (registration != nullptr) {
         BluetoothUnregisterAuthentication(registration);
+    }
+    if (authenticated != ERROR_SUCCESS) {
+        // Not in pairing mode after all; leave no half-made pairing behind.
+        BluetoothRemoveDevice(&info.Address);
+        LOG_INFO(Input, "Joycon pairing: '{}' didn't pair, authenticate={}",
+                 Common::UTF16ToUTF8(info.szName), authenticated);
+        return;
     }
 
     // HumanInterfaceDeviceServiceClass_UUID
@@ -179,10 +186,10 @@ void PairDiscoverableControllers() {
         HBLUETOOTH_DEVICE_FIND device_find = BluetoothFindFirstDevice(&search, &info);
         if (device_find != nullptr) {
             do {
-                // A controller trying to reconnect by itself also counts as recently seen, so
-                // never touch a bonded pairing: that one can still reconnect.
-                if (IsSwitchController(info) && !info.fConnected && !info.fAuthenticated &&
-                    SeenRecently(info)) {
+                // A controller reconnecting by itself also counts as recently seen. Windows only
+                // sets up a one-way link for those, so starting over is fine; if it isn't in
+                // pairing mode the pairing fails and is removed, and the sync button fixes it.
+                if (IsSwitchController(info) && !info.fConnected && SeenRecently(info)) {
                     Pair(radio, info);
                 }
                 info = {};
