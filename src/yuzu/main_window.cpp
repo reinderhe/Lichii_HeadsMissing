@@ -1012,6 +1012,17 @@ void MainWindow::InitializeWidgets() {
     firmware_label->setFocusPolicy(Qt::NoFocus);
     statusBar()->addPermanentWidget(firmware_label);
 
+    battery_label = new QLabel();
+    battery_label->setObjectName(QStringLiteral("BatteryLabel"));
+    battery_label->setVisible(false);
+    battery_label->setContentsMargins(4, 0, 4, 0);
+    battery_label->setFocusPolicy(Qt::NoFocus);
+    battery_label->setToolTip(tr("Controller battery. Joy-Cons and Pro Controllers only report "
+                                 "it in steps, so the percentage is approximate."));
+    statusBar()->addPermanentWidget(battery_label);
+    connect(&battery_update_timer, &QTimer::timeout, this, &MainWindow::UpdateBatteryLabel);
+    battery_update_timer.start(3000);
+
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusText(), 0);
     statusBar()->addPermanentWidget(multiplayer_state->GetStatusIcon(), 0);
 
@@ -5147,6 +5158,76 @@ void MainWindow::OnTasStateChanged() {
     ui->action_TAS_Start->setEnabled(emulation_running);
     ui->action_TAS_Record->setEnabled(emulation_running);
     ui->action_TAS_Reset->setEnabled(emulation_running);
+}
+
+void MainWindow::UpdateBatteryLabel() {
+    if (battery_label == nullptr || QtCommon::system == nullptr) {
+        return;
+    }
+
+    const auto describe = [](Common::Input::BatteryLevel level) -> QString {
+        switch (level) {
+        case Common::Input::BatteryLevel::Charging:
+            return tr("charging");
+        case Common::Input::BatteryLevel::Full:
+            return QStringLiteral("100%");
+        case Common::Input::BatteryLevel::Medium:
+            return QStringLiteral("~75%");
+        case Common::Input::BatteryLevel::Low:
+            return QStringLiteral("~50%");
+        case Common::Input::BatteryLevel::Critical:
+            return QStringLiteral("~25%");
+        case Common::Input::BatteryLevel::Empty:
+            return tr("empty");
+        default:
+            return {};
+        }
+    };
+
+    static constexpr std::array players{
+        Core::HID::NpadIdType::Handheld, Core::HID::NpadIdType::Player1,
+        Core::HID::NpadIdType::Player2,  Core::HID::NpadIdType::Player3,
+        Core::HID::NpadIdType::Player4,  Core::HID::NpadIdType::Player5,
+        Core::HID::NpadIdType::Player6,  Core::HID::NpadIdType::Player7,
+        Core::HID::NpadIdType::Player8,
+    };
+
+    QStringList entries;
+    auto& hid_core = QtCommon::system->HIDCore();
+    for (std::size_t i = 0; i < players.size(); ++i) {
+        const auto* controller = hid_core.GetEmulatedController(players[i]);
+        if (controller == nullptr || !controller->IsConnected()) {
+            continue;
+        }
+        const auto battery = controller->GetBatteryValues();
+        const auto left = describe(battery[Core::HID::EmulatedDeviceIndex::LeftIndex]);
+        const auto right = describe(battery[Core::HID::EmulatedDeviceIndex::RightIndex]);
+        const QString player = i == 0 ? tr("Handheld") : tr("P%1").arg(i);
+
+        switch (controller->GetNpadStyleIndex()) {
+        case Core::HID::NpadStyleIndex::JoyconDual:
+        case Core::HID::NpadStyleIndex::Handheld:
+            if (!left.isEmpty() || !right.isEmpty()) {
+                entries << tr("%1 L %2 R %3")
+                               .arg(player, left.isEmpty() ? QStringLiteral("-") : left,
+                                    right.isEmpty() ? QStringLiteral("-") : right);
+            }
+            break;
+        case Core::HID::NpadStyleIndex::JoyconRight:
+            if (!right.isEmpty()) {
+                entries << tr("%1 R %2").arg(player, right);
+            }
+            break;
+        default:
+            if (!left.isEmpty()) {
+                entries << tr("%1 %2").arg(player, left);
+            }
+            break;
+        }
+    }
+
+    battery_label->setText(tr("Battery: %1").arg(entries.join(QStringLiteral(" | "))));
+    battery_label->setVisible(!entries.isEmpty());
 }
 
 void MainWindow::UpdateStatusBar() {

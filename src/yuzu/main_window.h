@@ -485,6 +485,7 @@ private:
     void UpdateFrameGenButton();
     void UpdateVolumeUI();
     void UpdateStatusBar();
+    void UpdateBatteryLabel();
     void UpdateGPUAccuracyButton();
     void UpdateStatusButtons();
     void UpdateMenuIcons();
@@ -556,6 +557,7 @@ private:
     QLabel* emu_frametime_label = nullptr;
     QLabel* tas_label = nullptr;
     QLabel* firmware_label = nullptr;
+    QLabel* battery_label = nullptr;
     QPushButton* gpu_accuracy_button = nullptr;
     QPushButton* renderer_status_button = nullptr;
     QPushButton* refresh_button = nullptr;
@@ -575,6 +577,7 @@ private:
     QWidget* volume_popup = nullptr;
     QSlider* volume_slider = nullptr;
     QTimer status_bar_update_timer;
+    QTimer battery_update_timer;
 
     // Stores what suffix to add to the FPS counter, e.g. Unlocked.
     QString m_fpsSuffix{};
