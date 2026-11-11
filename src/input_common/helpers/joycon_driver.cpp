@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+
 #include "common/input.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
@@ -70,6 +72,7 @@ Common::Input::DriverResult JoyconDriver::InitializeDevice() {
     }
     std::scoped_lock lock{mutex};
     disable_input_thread = true;
+    const auto init_start = std::chrono::steady_clock::now();
 
     // Reset Counters
     error_counter = 0;
@@ -144,6 +147,11 @@ Common::Input::DriverResult JoyconDriver::InitializeDevice() {
     }
 
     disable_input_thread = false;
+    LOG_INFO(Input, "Joycon on port {} initialized in {} ms, input only={}", port,
+             std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - init_start)
+                 .count(),
+             input_only_device);
     return Common::Input::DriverResult::Success;
 }
 

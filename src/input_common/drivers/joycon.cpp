@@ -10,8 +10,8 @@
 #include <cstdlib>
 #include <string>
 
-#include "common/param_package.h"
 #include <ranges>
+#include "common/param_package.h"
 #include "common/polyfill_thread.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -111,6 +111,7 @@ void Joycons::ScanThread(std::stop_token stop_token) {
     constexpr u16 nintendo_vendor_id = 0x057e;
     Common::SetCurrentThreadName("JoyconScanThread");
     std::string last_seen;
+    u32 scan_count = 0;
 
     do {
         SDL_hid_device_info* devs = SDL_hid_enumerate(nintendo_vendor_id, 0x0);
@@ -144,18 +145,20 @@ void Joycons::ScanThread(std::stop_token stop_token) {
         }
 
         // Like Dolphin's continuous scanning: pair controllers whose sync button was pressed.
-        // The Bluetooth inquiry can add input lag, so it stops once a full set is connected.
-        if (AutoPairEnabled() && !HasFullSet() && !stop_token.stop_requested()) {
+        // The Bluetooth inquiry can add input lag, so it runs every 5 s and stops once a full set
+        // is connected. Devices are checked every second so a reconnecting controller is set up
+        // before it gives up waiting.
+        if (AutoPairEnabled() && !HasFullSet() && !stop_token.stop_requested() &&
+            scan_count++ % 5 == 0) {
             Joycon::PairDiscoverableControllers();
         }
-    } while (Common::StoppableTimedWait(stop_token, std::chrono::seconds{TraceEnabled() ? 1 : 5}));
+    } while (Common::StoppableTimedWait(stop_token, std::chrono::seconds{1}));
 }
 
 bool Joycons::HasFullSet() const {
     const auto connected = [](const auto& devices) {
-        return std::ranges::any_of(devices, [](const auto& device) {
-            return device && device->IsConnected();
-        });
+        return std::ranges::any_of(
+            devices, [](const auto& device) { return device && device->IsConnected(); });
     };
     return connected(pro_controller) || (connected(left_joycons) && connected(right_joycons));
 }

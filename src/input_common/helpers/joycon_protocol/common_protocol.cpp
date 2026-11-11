@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <string>
+
+#include <fmt/format.h>
+
 #include "common/input.h"
 #include "common/logging.h"
 #include "input_common/helpers/joycon_protocol/common_protocol.h"
@@ -79,14 +84,33 @@ Common::Input::DriverResult JoyconCommonProtocol::SendRawData(std::span<const u8
 Common::Input::DriverResult JoyconCommonProtocol::GetSubCommandResponse(
     SubCommand sc, SubCommandResponse& output) {
     constexpr int timeout_mili = 66;
-    return ReadSubCommandResponse(sc, output, [this](SubCommandResponse& candidate) {
-        const int result = SDL_hid_read_timeout(
-            hidapi_handle->handle, reinterpret_cast<u8*>(&candidate), sizeof(candidate), timeout_mili);
-        if (result < 1) {
-            LOG_ERROR(Input, "No response from joycon");
-        }
-        return result;
-    });
+    // EDEN_JOYCON_TRACE=1 logs which reports arrived instead of a missing reply
+    static const bool trace = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_TRACE");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    std::string seen;
+    const auto result =
+        ReadSubCommandResponse(sc, output, [this, &seen](SubCommandResponse& candidate) {
+            const int size =
+                SDL_hid_read_timeout(hidapi_handle->handle, reinterpret_cast<u8*>(&candidate),
+                                     sizeof(candidate), timeout_mili);
+            if (size < 1) {
+                LOG_ERROR(Input, "No response from joycon");
+            }
+            if (trace) {
+                seen += size < 1 ? fmt::format(" ({})", size)
+                                 : fmt::format(" {:02X}/{:02X}/{}",
+                                               static_cast<u8>(candidate.input_report.report_mode),
+                                               static_cast<u8>(candidate.sub_command), size);
+            }
+            return size;
+        });
+    if (trace && result != Common::Input::DriverResult::Success) {
+        LOG_INFO(Input, "Joycon subcommand {:02X} got no reply, reports (mode/subcommand/size):{}",
+                 static_cast<u8>(sc), seen);
+    }
+    return result;
 }
 
 Common::Input::DriverResult JoyconCommonProtocol::SendSubCommand(SubCommand sc,
