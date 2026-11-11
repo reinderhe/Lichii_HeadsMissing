@@ -13,6 +13,7 @@
 
 #include <array>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include <SDL3/SDL_hidapi.h>
@@ -505,6 +506,10 @@ struct VibrationValue {
 struct JoyconHandle {
     SDL_hid_device* handle = nullptr;
     u8 packet_counter{};
+    // Windows fallback for writes: the device path and an extra handle to it
+    std::string path;
+    void* output_handle = nullptr;
+    bool use_output_report = false;
 };
 
 struct MCUConfig {

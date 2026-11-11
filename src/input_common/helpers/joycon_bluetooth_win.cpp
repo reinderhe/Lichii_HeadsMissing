@@ -5,13 +5,16 @@
 
 #ifdef _WIN32
 
+#include <algorithm>
 #include <cwchar>
 #include <set>
 #include <string>
+#include <vector>
 
 // clang-format off
 #include <windows.h>
 #include <bluetoothapis.h>
+#include <hidsdi.h>
 // clang-format on
 
 #include <fmt/format.h>
@@ -197,9 +200,57 @@ void PairDiscoverableControllers() {
 
 } // namespace InputCommon::Joycon
 
+namespace InputCommon::Joycon {
+
+bool SetOutputReport(const std::string& path, void*& output_handle, std::span<const u8> data) {
+    if (output_handle == nullptr) {
+        HANDLE device =
+            CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (device == INVALID_HANDLE_VALUE) {
+            LOG_ERROR(Input, "Joycon output fallback: can't open device, error={}", GetLastError());
+            return false;
+        }
+        output_handle = device;
+    }
+    HANDLE device = static_cast<HANDLE>(output_handle);
+
+    USHORT report_length = 0;
+    PHIDP_PREPARSED_DATA preparsed = nullptr;
+    if (HidD_GetPreparsedData(device, &preparsed)) {
+        HIDP_CAPS caps{};
+        if (HidP_GetCaps(preparsed, &caps) == HIDP_STATUS_SUCCESS) {
+            report_length = caps.OutputReportByteLength;
+        }
+        HidD_FreePreparsedData(preparsed);
+    }
+
+    std::vector<u8> report(std::max<std::size_t>(report_length, data.size()));
+    std::copy(data.begin(), data.end(), report.begin());
+    if (!HidD_SetOutputReport(device, report.data(), static_cast<ULONG>(report.size()))) {
+        LOG_ERROR(Input, "Joycon output fallback: HidD_SetOutputReport failed, error={}",
+                  GetLastError());
+        return false;
+    }
+    return true;
+}
+
+void CloseOutputHandle(void*& output_handle) {
+    if (output_handle != nullptr) {
+        CloseHandle(static_cast<HANDLE>(output_handle));
+        output_handle = nullptr;
+    }
+}
+
+} // namespace InputCommon::Joycon
+
 #else
 
 namespace InputCommon::Joycon {
+bool SetOutputReport(const std::string&, void*&, std::span<const u8>) {
+    return false;
+}
+void CloseOutputHandle(void*&) {}
 void PairDiscoverableControllers() {}
 void TracePairedControllers() {}
 } // namespace InputCommon::Joycon

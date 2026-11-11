@@ -85,7 +85,7 @@ else()
     target_link_libraries(input_common PRIVATE SDL3::SDL3)
     target_compile_definitions(input_common PRIVATE HAVE_SDL3)
     if (WIN32)
-        target_link_libraries(input_common PRIVATE bthprops)
+        target_link_libraries(input_common PRIVATE bthprops hid)
     endif()
 endif()
 

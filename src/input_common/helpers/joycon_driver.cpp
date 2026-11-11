@@ -11,6 +11,7 @@
 #include "common/scope_exit.h"
 #include "common/swap.h"
 #include "common/thread.h"
+#include "input_common/helpers/joycon_bluetooth_win.h"
 #include "input_common/helpers/joycon_driver.h"
 #include "input_common/helpers/joycon_protocol/calibration.h"
 #include "input_common/helpers/joycon_protocol/generic_functions.h"
@@ -57,6 +58,9 @@ Common::Input::DriverResult JoyconDriver::RequestDeviceAccess(SDL_hid_device_inf
     hidapi_handle->handle =
         SDL_hid_open(device_info->vendor_id, device_info->product_id, device_info->serial_number);
     std::memcpy(&handle_serial_number, device_info->serial_number, 15);
+    CloseOutputHandle(hidapi_handle->output_handle);
+    hidapi_handle->use_output_report = false;
+    hidapi_handle->path = device_info->path != nullptr ? device_info->path : "";
     if (!hidapi_handle->handle) {
         LOG_ERROR(Input, "Yuzu can't gain access to this device: ID {:04X}:{:04X}.",
                   device_info->vendor_id, device_info->product_id);
