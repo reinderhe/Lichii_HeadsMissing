@@ -11,7 +11,6 @@
 
 #include "common/input.h"
 #include "common/logging.h"
-#include "input_common/helpers/joycon_bluetooth_win.h"
 #include "input_common/helpers/joycon_protocol/common_protocol.h"
 #include "input_common/helpers/joycon_protocol/subcommand_response.h"
 
@@ -73,23 +72,9 @@ Common::Input::DriverResult JoyconCommonProtocol::SetReportMode(ReportMode repor
 }
 
 Common::Input::DriverResult JoyconCommonProtocol::SendRawData(std::span<const u8> buffer) {
-    // A Joy-Con that reconnected by itself to Windows can time out every interrupt channel write;
-    // the control channel still reaches it.
-    if (hidapi_handle->use_output_report) {
-        return SetOutputReport(hidapi_handle->path, hidapi_handle->output_handle, buffer)
-                   ? Common::Input::DriverResult::Success
-                   : Common::Input::DriverResult::ErrorWritingData;
-    }
-
     const auto result = SDL_hid_write(hidapi_handle->handle, buffer.data(), buffer.size());
 
     if (result == -1) {
-        if (!hidapi_handle->path.empty() &&
-            SetOutputReport(hidapi_handle->path, hidapi_handle->output_handle, buffer)) {
-            LOG_WARNING(Input, "Joycon write failed, sending through the control channel instead");
-            hidapi_handle->use_output_report = true;
-            return Common::Input::DriverResult::Success;
-        }
         return Common::Input::DriverResult::ErrorWritingData;
     }
 
