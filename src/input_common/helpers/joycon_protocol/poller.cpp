@@ -334,7 +334,14 @@ std::pair<f32, f32> JoyconPoller::GetPassiveAxisValue(PassivePadStick raw_value)
 
 f32 JoyconPoller::GetAccelerometerValue(s16 raw, const MotionSensorCalibration& cal,
                                         AccelerometerSensitivity sensitivity) const {
-    const f32 value = raw * (1.0f / (cal.scale - cal.offset)) * 4;
+    // Experiment: EDEN_JOYCON_ACCEL_OFFSET=1 subtracts the factory zero offset like the gyroscope
+    // does, in case Joy-Cons lying flat read a few degrees of tilt because of it.
+    static const bool subtract_offset = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_ACCEL_OFFSET");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    const f32 centered = subtract_offset ? static_cast<f32>(raw - cal.offset) : raw;
+    const f32 value = centered * (1.0f / (cal.scale - cal.offset)) * 4;
     switch (sensitivity) {
     case Joycon::AccelerometerSensitivity::G2:
         return value / 4.0f;

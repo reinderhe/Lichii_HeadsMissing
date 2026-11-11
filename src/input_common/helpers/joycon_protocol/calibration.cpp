@@ -4,9 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <cstring>
 
 #include "common/input.h"
+#include "common/logging.h"
 #include "input_common/helpers/joycon_protocol/calibration.h"
 #include "input_common/helpers/joycon_protocol/joycon_types.h"
 
@@ -129,6 +131,22 @@ Common::Input::DriverResult CalibrationProtocol::GetImuCalibration(MotionCalibra
     }
 
     ValidateCalibration(calibration);
+
+    static const bool trace = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_TRACE");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    if (trace) {
+        const auto& a = calibration.accelerometer;
+        const auto& g = calibration.gyro;
+        LOG_INFO(Input,
+                 "Joycon IMU calibration ({}, user={}): accel offset {} {} {} scale {} {} {}, "
+                 "gyro offset {} {} {} scale {} {} {}",
+                 result == Common::Input::DriverResult::Success ? "read" : "defaults",
+                 has_user_calibration, a[0].offset, a[1].offset, a[2].offset, a[0].scale,
+                 a[1].scale, a[2].scale, g[0].offset, g[1].offset, g[2].offset, g[0].scale,
+                 g[1].scale, g[2].scale);
+    }
 
     return result;
 }
