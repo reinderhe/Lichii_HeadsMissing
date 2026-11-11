@@ -129,13 +129,23 @@ Common::Input::DriverResult JoyconCommonProtocol::SendSubCommand(SubCommand sc,
 
     memcpy(packet.command_data.data(), buffer.data(), buffer.size());
 
-    auto result = SendData(packet);
-
-    if (result != Common::Input::DriverResult::Success) {
-        return result;
+    // A Joy-Con that was just paired can ignore its first commands for a few seconds, so resend
+    // a command that got no reply before giving up on it.
+    Common::Input::DriverResult result{};
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (attempt > 0) {
+            packet.packet_counter = GetCounter();
+        }
+        result = SendData(packet);
+        if (result != Common::Input::DriverResult::Success) {
+            return result;
+        }
+        result = GetSubCommandResponse(sc, output);
+        if (result != Common::Input::DriverResult::Timeout) {
+            return result;
+        }
     }
-
-    return GetSubCommandResponse(sc, output);
+    return result;
 }
 
 Common::Input::DriverResult JoyconCommonProtocol::SendSubCommand(SubCommand sc,
