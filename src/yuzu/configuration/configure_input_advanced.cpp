@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <QCheckBox>
 #include <QColorDialog>
+#include <QGridLayout>
 #include "common/settings.h"
 #include "core/core.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -16,6 +18,7 @@
 ConfigureInputAdvanced::ConfigureInputAdvanced(Core::HID::HIDCore& hid_core_, QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureInputAdvanced>()), hid_core{hid_core_} {
     ui->setupUi(this);
+    AddJoyconOptions();
 
     controllers_color_buttons = {{
         {
@@ -148,6 +151,43 @@ void ConfigureInputAdvanced::ApplyConfiguration() {
     Settings::values.enable_joycon_driver = ui->enable_joycon_driver->isChecked();
     Settings::values.enable_procon_driver = ui->enable_procon_driver->isChecked();
     Settings::values.random_amiibo_id = ui->random_amiibo_id->isChecked();
+    Settings::values.joycon_auto_pair = joycon_auto_pair->isChecked();
+    Settings::values.joycon_power_off_on_exit = joycon_power_off_on_exit->isChecked();
+    Settings::values.motion_gravity_correction = motion_gravity_correction->isChecked();
+    Settings::values.motion_fast_drift_correction = motion_fast_drift_correction->isChecked();
+}
+
+void ConfigureInputAdvanced::AddJoyconOptions() {
+    QGridLayout* layout = ui->OtherGridLayout;
+    const auto add = [&](const QString& text, const QString& tooltip) {
+        auto* box = new QCheckBox(text, ui->enable_procon_driver->parentWidget());
+        box->setToolTip(tooltip);
+        box->setMinimumHeight(23);
+        layout->addWidget(box, layout->rowCount(), 0);
+        return box;
+    };
+    joycon_auto_pair =
+        add(tr("Pair Joy-Cons automatically (sync button)"),
+            tr("While a Joy-Con or Pro Controller set is incomplete, pairs controllers whose "
+               "sync button is pressed, without Windows' Bluetooth settings. Windows only."));
+    joycon_power_off_on_exit =
+        add(tr("Turn Joy-Cons off when Lichii closes"),
+            tr("Disconnects the Joy-Cons and puts them to sleep on exit. Leave it off to keep "
+               "them connected to the PC between sessions."));
+    motion_gravity_correction =
+        add(tr("Motion: correct gravity to 1 g [EXPERIMENTAL]"),
+            tr("Scales the accelerometer while the controller lies still, for sensors that "
+               "measure gravity a few percent off."));
+    motion_fast_drift_correction =
+        add(tr("Motion: fast drift correction [EXPERIMENTAL]"),
+            tr("Learns the gyroscope offset quickly while the controller lies completely "
+               "still."));
+    joycon_auto_pair->setEnabled(ui->enable_joycon_driver->isChecked());
+    joycon_power_off_on_exit->setEnabled(ui->enable_joycon_driver->isChecked());
+    connect(ui->enable_joycon_driver, &QCheckBox::toggled, this, [this](bool checked) {
+        joycon_auto_pair->setEnabled(checked);
+        joycon_power_off_on_exit->setEnabled(checked);
+    });
 }
 
 void ConfigureInputAdvanced::LoadConfiguration() {
@@ -184,6 +224,11 @@ void ConfigureInputAdvanced::LoadConfiguration() {
     ui->enable_joycon_driver->setChecked(Settings::values.enable_joycon_driver.GetValue());
     ui->enable_procon_driver->setChecked(Settings::values.enable_procon_driver.GetValue());
     ui->random_amiibo_id->setChecked(Settings::values.random_amiibo_id.GetValue());
+    joycon_auto_pair->setChecked(Settings::values.joycon_auto_pair.GetValue());
+    joycon_power_off_on_exit->setChecked(Settings::values.joycon_power_off_on_exit.GetValue());
+    motion_gravity_correction->setChecked(Settings::values.motion_gravity_correction.GetValue());
+    motion_fast_drift_correction->setChecked(
+        Settings::values.motion_fast_drift_correction.GetValue());
 
     UpdateUIEnabled();
 }

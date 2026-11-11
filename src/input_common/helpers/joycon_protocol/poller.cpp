@@ -4,7 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
+
 #include "input_common/helpers/joycon_protocol/poller.h"
 
 namespace InputCommon::Joycon {
@@ -23,6 +27,24 @@ void JoyconPoller::ReadActiveMode(std::span<u8> buffer, const MotionStatus& moti
                                   const RingStatus& ring_status) {
     InputReportActive data{};
     memcpy(&data, buffer.data(), sizeof(InputReportActive));
+
+    // A full report carries three IMU samples. The Ring-Con overwrites the third one, and
+    // EDEN_JOYCON_IMU_SAMPLES=1 keeps the old behaviour of using only the first.
+    static const bool first_sample_only = [] {
+        const char* setting = std::getenv("EDEN_JOYCON_IMU_SAMPLES");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    constexpr std::size_t ImuOffset = 13;
+    const std::size_t available = buffer.size() >= ImuOffset ? (buffer.size() - ImuOffset) / 12 : 0;
+    imu_sample_count =
+        first_sample_only ? 1 : std::min<std::size_t>(ring_status.is_enabled ? 2 : 3, available);
+    imu_sample_count = std::max<std::size_t>(imu_sample_count, 1);
+    if (available >= imu_sample_count) {
+        memcpy(imu_samples.data(), buffer.data() + ImuOffset, imu_sample_count * 12);
+    } else {
+        memcpy(imu_samples.data(), data.motion_input.data(), 12);
+        imu_sample_count = 1;
+    }
 
     switch (device_type) {
     case ControllerType::Left:
@@ -352,25 +374,30 @@ MotionData JoyconPoller::GetMotionInput(const InputReportActive& input,
     MotionData motion{};
     const auto& accel_cal = motion_calibration.accelerometer;
     const auto& gyro_cal = motion_calibration.gyro;
-    const s16 raw_accel_x = input.motion_input[1];
-    const s16 raw_accel_y = input.motion_input[0];
-    const s16 raw_accel_z = input.motion_input[2];
-    const s16 raw_gyro_x = input.motion_input[4];
-    const s16 raw_gyro_y = input.motion_input[3];
-    const s16 raw_gyro_z = input.motion_input[5];
-
     motion.delta_timestamp = motion_status.delta_time;
-    motion.accel_x =
-        GetAccelerometerValue(raw_accel_x, accel_cal[1], motion_status.accelerometer_sensitivity);
-    motion.accel_y =
-        GetAccelerometerValue(raw_accel_y, accel_cal[0], motion_status.accelerometer_sensitivity);
-    motion.accel_z =
-        GetAccelerometerValue(raw_accel_z, accel_cal[2], motion_status.accelerometer_sensitivity);
-    motion.gyro_x = GetGyroValue(raw_gyro_x, gyro_cal[1], motion_status.gyro_sensitivity);
-    motion.gyro_y = GetGyroValue(raw_gyro_y, gyro_cal[0], motion_status.gyro_sensitivity);
-    motion.gyro_z = GetGyroValue(raw_gyro_z, gyro_cal[2], motion_status.gyro_sensitivity);
 
-    // TODO(German77): Return all three samples data
+    // Average every sample of the report: one update covers all of them, so using only the first
+    // misses part of fast movements.
+    const std::size_t count = std::max<std::size_t>(imu_sample_count, 1);
+    for (std::size_t i = 0; i < count; ++i) {
+        const s16* sample = &imu_samples[i * 6];
+        motion.accel_x +=
+            GetAccelerometerValue(sample[1], accel_cal[1], motion_status.accelerometer_sensitivity);
+        motion.accel_y +=
+            GetAccelerometerValue(sample[0], accel_cal[0], motion_status.accelerometer_sensitivity);
+        motion.accel_z +=
+            GetAccelerometerValue(sample[2], accel_cal[2], motion_status.accelerometer_sensitivity);
+        motion.gyro_x += GetGyroValue(sample[4], gyro_cal[1], motion_status.gyro_sensitivity);
+        motion.gyro_y += GetGyroValue(sample[3], gyro_cal[0], motion_status.gyro_sensitivity);
+        motion.gyro_z += GetGyroValue(sample[5], gyro_cal[2], motion_status.gyro_sensitivity);
+    }
+    const f32 scale = 1.0f / static_cast<f32>(count);
+    motion.accel_x *= scale;
+    motion.accel_y *= scale;
+    motion.accel_z *= scale;
+    motion.gyro_x *= scale;
+    motion.gyro_y *= scale;
+    motion.gyro_z *= scale;
     return motion;
 }
 

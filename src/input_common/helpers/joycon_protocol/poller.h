@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <functional>
 #include <span>
 
@@ -77,6 +79,10 @@ private:
     JoyStickCalibration left_stick_calibration{};
     JoyStickCalibration right_stick_calibration{};
     MotionCalibration motion_calibration{};
+
+    // Raw IMU samples of the last full report: up to three, 5 ms apart
+    std::array<s16, 18> imu_samples{};
+    std::size_t imu_sample_count{1};
 
     JoyconCallbacks callbacks{};
 };

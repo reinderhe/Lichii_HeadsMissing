@@ -50,12 +50,13 @@ bool TraceEnabled() {
 
 bool AutoPairEnabled() {
     const char* setting = std::getenv("EDEN_JOYCON_AUTO_PAIR");
-    return setting == nullptr || setting[0] != '0';
+    return setting != nullptr ? setting[0] != '0' : Settings::values.joycon_auto_pair.GetValue();
 }
 
 bool PowerOffOnExit() {
     const char* setting = std::getenv("EDEN_JOYCON_POWER_OFF");
-    return setting == nullptr || setting[0] != '0';
+    return setting != nullptr ? setting[0] != '0'
+                              : Settings::values.joycon_power_off_on_exit.GetValue();
 }
 } // namespace
 

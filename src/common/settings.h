@@ -928,6 +928,13 @@ struct Values {
     Setting<bool> controller_navigation{linkage, true, "controller_navigation", Category::Controls};
     Setting<bool> enable_joycon_driver{linkage, true, "enable_joycon_driver", Category::Controls};
     Setting<bool> enable_procon_driver{linkage, false, "enable_procon_driver", Category::Controls};
+    Setting<bool> joycon_auto_pair{linkage, true, "joycon_auto_pair", Category::Controls};
+    Setting<bool> joycon_power_off_on_exit{linkage, true, "joycon_power_off_on_exit",
+                                           Category::Controls};
+    Setting<bool> motion_gravity_correction{linkage, false, "motion_gravity_correction",
+                                            Category::Controls};
+    Setting<bool> motion_fast_drift_correction{linkage, false, "motion_fast_drift_correction",
+                                               Category::Controls};
 
     SwitchableSetting<bool> vibration_enabled{linkage, true, "vibration_enabled",
                                               Category::Controls};

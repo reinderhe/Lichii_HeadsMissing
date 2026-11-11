@@ -8,6 +8,7 @@
 #include <QWidget>
 
 class QColor;
+class QCheckBox;
 class QPushButton;
 
 namespace Ui {
@@ -44,7 +45,14 @@ private:
 
     void LoadConfiguration();
 
+    void AddJoyconOptions();
+
     std::unique_ptr<Ui::ConfigureInputAdvanced> ui;
+
+    QCheckBox* joycon_auto_pair = nullptr;
+    QCheckBox* joycon_power_off_on_exit = nullptr;
+    QCheckBox* motion_gravity_correction = nullptr;
+    QCheckBox* motion_fast_drift_correction = nullptr;
 
     std::array<std::array<QColor, 4>, 8> controllers_colors;
     std::array<std::array<QPushButton*, 4>, 8> controllers_color_buttons;

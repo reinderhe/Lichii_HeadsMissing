@@ -9,12 +9,14 @@
 #include <numbers>
 
 #include "common/math_util.h"
+#include "common/settings.h"
 #include "hid_core/frontend/motion_input.h"
 
 namespace Core::HID {
 
 namespace {
 constexpr f32 DefaultBiasRate = 0.0001f;
+constexpr f32 FastBiasRate = 0.005f;
 } // namespace
 
 MotionInput::MotionInput() {
@@ -38,11 +40,13 @@ void MotionInput::SetAcceleration(const Common::Vec<f32, 3>& acceleration) {
         const char* setting = std::getenv("EDEN_NX2_ACCEL_NORMALIZE");
         return setting != nullptr && setting[0] == '1';
     }();
+    const bool normalize_enabled =
+        normalize || Settings::values.motion_gravity_correction.GetValue();
 
     prev_raw_accel = raw_accel;
     raw_accel = acceleration;
     accel = acceleration;
-    if (normalize) {
+    if (normalize_enabled) {
         const f32 length = acceleration.Length();
         if (accel_norm == 0.0f && length > 0.5f && length < 1.5f) {
             accel_norm = length;
@@ -73,8 +77,13 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
     static const f32 bias_rate = [] {
         const char* setting = std::getenv("EDEN_NX2_GYRO_BIAS_RATE");
         const f32 value = setting != nullptr ? std::strtof(setting, nullptr) : 0.0f;
-        return value > 0.0f && value < 1.0f ? value : DefaultBiasRate;
+        return value > 0.0f && value < 1.0f ? value : 0.0f;
     }();
+    const f32 still_bias_rate =
+        bias_rate > 0.0f
+            ? bias_rate
+            : (Settings::values.motion_fast_drift_correction.GetValue() ? FastBiasRate
+                                                                        : DefaultBiasRate);
     static const bool deadzone = [] {
         const char* setting = std::getenv("EDEN_NX2_GYRO_DEADZONE");
         return setting == nullptr || setting[0] != '0';
@@ -86,7 +95,7 @@ void MotionInput::SetGyroscope(const Common::Vec<f32, 3>& gyroscope) {
 
     // Auto adjust gyro_bias to minimize drift
     if (still_samples >= 60) {
-        gyro_bias = (gyro_bias * (1.0f - bias_rate)) + (gyroscope * bias_rate);
+        gyro_bias = (gyro_bias * (1.0f - still_bias_rate)) + (gyroscope * still_bias_rate);
     } else if (!IsMoving(IsAtRestRelaxed)) {
         gyro_bias = (gyro_bias * (1.0f - DefaultBiasRate)) + (gyroscope * DefaultBiasRate);
     }
