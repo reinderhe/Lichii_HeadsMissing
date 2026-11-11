@@ -508,7 +508,7 @@ struct Memory::Impl {
                 return value != nullptr && value[0] == '1';
             }();
             const bool reactive_flushing =
-                Settings::values.use_reactive_flushing.GetValue() &&
+                Settings::ReactiveFlushing() &&
                 !(nx2_no_reactive && Settings::CurrentProgramIsSwitch2());
             if (!reactive_flushing || !cached) {
                 perm |= Common::MemoryPermission::Read;
@@ -590,7 +590,7 @@ struct Memory::Impl {
             return value != nullptr && value[0] == '0';
         }();
         return !disabled && current_page_table->fastmem_arena &&
-               !Settings::values.use_reactive_flushing.GetValue() &&
+               !Settings::ReactiveFlushing() &&
                Settings::values.cpu_backend.GetValue() != Settings::CpuBackend::Nce;
     }
 

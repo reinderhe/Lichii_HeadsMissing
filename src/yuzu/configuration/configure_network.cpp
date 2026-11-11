@@ -24,6 +24,7 @@ ConfigureNetwork::~ConfigureNetwork() = default;
 void ConfigureNetwork::ApplyConfiguration() {
     Settings::values.network_interface = ui->network_interface->currentText().toStdString();
     Settings::values.airplane_mode = ui->airplane_mode->isChecked();
+    Settings::values.lan_play = ui->lan_play->isChecked();
 }
 
 void ConfigureNetwork::changeEvent(QEvent* event) {
@@ -45,4 +46,5 @@ void ConfigureNetwork::SetConfiguration() {
     ui->network_interface->setCurrentText(QString::fromStdString(network_interface));
     ui->network_interface->setEnabled(runtime_lock);
     ui->airplane_mode->setChecked(airplane_mode);
+    ui->lan_play->setChecked(Settings::values.lan_play.GetValue());
 }

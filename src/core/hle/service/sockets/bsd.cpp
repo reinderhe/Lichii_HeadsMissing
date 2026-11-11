@@ -1392,7 +1392,7 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
 
     std::shared_ptr<Network::SocketBase> socket;
     auto room_member = Network::GetRoomMember().lock();
-    if (room_member && room_member->IsConnected()) {
+    if (room_member && room_member->IsConnected() && !Network::IsDirectLanActive()) {
         socket = std::make_shared<Network::ProxySocket>();
     } else {
         socket = std::make_shared<Network::Socket>();

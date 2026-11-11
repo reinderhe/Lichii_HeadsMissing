@@ -10,28 +10,31 @@
 # tools/package_release.py. When neither is available, the frontend is built
 # without the converter.
 #
-# Defines nxformat::nxformat and LICHII_NXFORMAT_RUNTIME, the shared library to
-# ship next to the executable, when the converter is built.
+# The static library is linked into the executable, so there is no shared
+# library to ship: a missing one stopped Lichii from starting. Its variant
+# without Zstandard is used, so the converter runs on Lichii's own bundled zstd
+# and the executable holds a single copy of it.
+#
+# Defines nxformat::static_nozstd when the converter is built.
 set(LICHII_NXFORMAT_ROOT "" CACHE PATH "Unpacked nxformat release (empty: download the pinned one)")
-set(LICHII_NXFORMAT_RUNTIME "" CACHE INTERNAL "")
 
 function(lichii_find_nxformat)
-    set(version 1.0.0)
-    set(tag V1.0.0)
+    set(version 1.0.3)
+    set(tag V1.0.3)
     set(root "${LICHII_NXFORMAT_ROOT}")
     if (NOT root)
         if (WIN32 AND ARCHITECTURE_x86_64)
             set(platform windows-x64)
-            set(sha256 04da098da72d302816c1d8a39da926f1c5310505f9eda17fb557be44042cb173)
+            set(sha256 f96148cf062adaa0aed3069945f08e1d7537e38d490f714f3bb27767fc297066)
         elseif (APPLE)
             set(platform macos-universal)
-            set(sha256 efe81f6a28b285af11be4ea35b7097d94134f9a81c604c3fc7764876575aa458)
+            set(sha256 b61fecfad224d2f0b6a040c23663e5f6915eb500be9fc36016e3ffcb0aa66e52)
         elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ARCHITECTURE_x86_64)
             set(platform linux-x64)
-            set(sha256 201481663a54f1d38f4a2dc4b1bf1084d995a899ff4237a78506646b1bd144e1)
+            set(sha256 d058c1b5a6732f303f06e84090e7d8c967e25a4704a1b35ff5cbe06806f6857b)
         elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ARCHITECTURE_arm64)
             set(platform linux-arm64)
-            set(sha256 c48952e4f3bcd92fd43e0317c3a534085c4be8bb32a8e27ed7880649549dd66c)
+            set(sha256 0b412293c94ea4dbe29f73f26117b7461af42ff3354d4e239a5e07ba0d4994d2)
         else()
             message(WARNING "NX converter disabled: nxformat has no prebuilt library for this platform. "
                             "Set LICHII_NXFORMAT_ROOT to an unpacked nxformat release to build it. "
@@ -72,8 +75,13 @@ function(lichii_find_nxformat)
     endif()
 
     find_package(nxformat ${version} REQUIRED CONFIG PATHS "${root}/lib/cmake/nxformat" NO_DEFAULT_PATH)
-    set_target_properties(nxformat::nxformat PROPERTIES IMPORTED_GLOBAL TRUE)
-    set(LICHII_NXFORMAT_RUNTIME "${NXFORMAT_RUNTIME}" CACHE INTERNAL "")
+    set_target_properties(nxformat::static_nozstd PROPERTIES IMPORTED_GLOBAL TRUE)
+    set_property(TARGET nxformat::static_nozstd APPEND PROPERTY INTERFACE_LINK_LIBRARIES zstd::zstd)
+    if (MSVC)
+        # The library is built against the release DLL runtime (/MD); Debug builds use /MDd.
+        set_property(TARGET nxformat::static_nozstd APPEND PROPERTY INTERFACE_LINK_OPTIONS
+            "$<$<CONFIG:Debug>:/NODEFAULTLIB:msvcrt>")
+    endif()
     message(STATUS "nxformat ${nxformat_VERSION}: ${root}")
 endfunction()
 
