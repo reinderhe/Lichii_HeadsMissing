@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <thread>
 
 #include "common/input.h"
 #include "common/logging.h"
@@ -104,10 +105,15 @@ Common::Input::DriverResult JoyconDriver::InitializeDevice() {
     ring_protocol = std::make_unique<RingConProtocol>(hidapi_handle);
     rumble_protocol = std::make_unique<RumbleProtocol>(hidapi_handle);
 
-    // Get fixed joycon info
-    if (generic_protocol->GetVersionNumber(version) != Common::Input::DriverResult::Success) {
-        // If this command fails the device doesn't accept configuration commands
-        input_only_device = true;
+    // Get fixed joycon info. A Joy-Con that was paired a moment ago can miss the first replies
+    // while Windows is still setting it up, so try a few times before treating it as input only.
+    input_only_device = true;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (generic_protocol->GetVersionNumber(version) == Common::Input::DriverResult::Success) {
+            input_only_device = false;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     if (!input_only_device) {
