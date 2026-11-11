@@ -27,24 +27,23 @@ bool IsSwitchController(const BLUETOOTH_DEVICE_INFO& info) {
            std::wcscmp(info.szName, L"Pro Controller") == 0;
 }
 
-// Inquiry also returns remembered devices that are out of range, so only trust recent sightings.
-bool SeenRecently(const BLUETOOTH_DEVICE_INFO& info) {
+// Inquiry also returns remembered devices that are out of range, and a controller that was
+// connected until a moment ago still has a recent sighting, so only trust devices that answered
+// this inquiry.
+bool SeenSince(const BLUETOOTH_DEVICE_INFO& info, const SYSTEMTIME& since) {
     FILETIME seen_ft{};
-    FILETIME now_ft{};
-    SYSTEMTIME now{};
-    GetSystemTime(&now);
-    if (!SystemTimeToFileTime(&info.stLastSeen, &seen_ft) || !SystemTimeToFileTime(&now, &now_ft)) {
+    FILETIME since_ft{};
+    if (!SystemTimeToFileTime(&info.stLastSeen, &seen_ft) ||
+        !SystemTimeToFileTime(&since, &since_ft)) {
         return false;
     }
-    ULARGE_INTEGER seen{}, current{};
+    ULARGE_INTEGER seen{}, start{};
     seen.LowPart = seen_ft.dwLowDateTime;
     seen.HighPart = seen_ft.dwHighDateTime;
-    current.LowPart = now_ft.dwLowDateTime;
-    current.HighPart = now_ft.dwHighDateTime;
-    constexpr ULONGLONG Window = 30ULL * 10'000'000ULL; // 30 s in 100 ns units
-    const ULONGLONG diff = current.QuadPart > seen.QuadPart ? current.QuadPart - seen.QuadPart
-                                                            : seen.QuadPart - current.QuadPart;
-    return diff < Window;
+    start.LowPart = since_ft.dwLowDateTime;
+    start.HighPart = since_ft.dwHighDateTime;
+    constexpr ULONGLONG Tolerance = 10'000'000ULL; // 1 s in 100 ns units
+    return seen.QuadPart + Tolerance >= start.QuadPart;
 }
 
 BOOL CALLBACK AcceptAuthentication(LPVOID, PBLUETOOTH_AUTHENTICATION_CALLBACK_PARAMS params) {
@@ -181,6 +180,8 @@ void PairDiscoverableControllers() {
         search.cTimeoutMultiplier = 2; // 2.56 s
         search.hRadio = radio;
 
+        SYSTEMTIME inquiry_start{};
+        GetSystemTime(&inquiry_start);
         BLUETOOTH_DEVICE_INFO info{};
         info.dwSize = sizeof(info);
         HBLUETOOTH_DEVICE_FIND device_find = BluetoothFindFirstDevice(&search, &info);
@@ -189,7 +190,8 @@ void PairDiscoverableControllers() {
                 // A controller reconnecting by itself also counts as recently seen. Windows only
                 // sets up a one-way link for those, so starting over is fine; if it isn't in
                 // pairing mode the pairing fails and is removed, and the sync button fixes it.
-                if (IsSwitchController(info) && !info.fConnected && SeenRecently(info)) {
+                if (IsSwitchController(info) && !info.fConnected &&
+                    SeenSince(info, inquiry_start)) {
                     Pair(radio, info);
                 }
                 info = {};
