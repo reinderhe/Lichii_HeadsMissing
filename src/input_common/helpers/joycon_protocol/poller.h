@@ -70,8 +70,14 @@ private:
     s16 GetRawIMUValues(size_t sensor, size_t axis, const InputReportActive& input) const;
 
     /// Returns motion data from a buffer
-    MotionData GetMotionInput(const InputReportActive& input,
-                              const MotionStatus& motion_status) const;
+    MotionData GetMotionInput(const InputReportActive& input, const MotionStatus& motion_status,
+                              std::size_t first, std::size_t count) const;
+
+    /// Sends the motion of the last report: one averaged sample, or with EDEN_NX2_MOTION_SAMPLES=1
+    /// every sample on its own
+    template <typename Rotate>
+    void SendMotion(const InputReportActive& input, const MotionStatus& motion_status, int id,
+                    int second_id, Rotate rotate);
 
     ControllerType device_type{};
 

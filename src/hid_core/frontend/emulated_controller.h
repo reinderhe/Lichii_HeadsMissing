@@ -9,6 +9,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -363,6 +364,13 @@ public:
     /// Returns the latest status of motion input from the mouse
     MotionState GetMotions() const;
 
+    /**
+     * With EDEN_NX2_MOTION_SAMPLES=1, returns the oldest motion sample not taken yet for each
+     * sensor (the latest one when none is waiting), so every sample a controller reports reaches
+     * the guest. Otherwise the same as GetMotions.
+     */
+    MotionState TakeMotions();
+
     /// Returns the latest color value from the controller
     ControllerColors GetColors() const;
 
@@ -653,6 +661,8 @@ private:
     std::optional<InjectedInput> Injected() const;
 
     mutable std::mutex callback_mutex;
+    std::mutex motion_queue_mutex;
+    std::array<std::deque<ControllerMotion>, 2> motion_queue{};
     ::Common::unordered_map<int, ControllerUpdateCallback> callback_list;
 
     mutable std::mutex injector_mutex;

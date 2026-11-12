@@ -110,7 +110,7 @@ void SixAxis::OnUpdate(const Core::Timing::CoreTiming& core_timing) {
                 continue;
             }
 
-            const auto& motion_state = controller.device->GetMotions();
+            const auto motion_state = controller.device->TakeMotions();
             auto& sixaxis_fullkey_state = controller.sixaxis_fullkey_state;
             auto& sixaxis_handheld_state = controller.sixaxis_handheld_state;
             auto& sixaxis_dual_left_state = controller.sixaxis_dual_left_state;

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <common/scope_exit.h>
 
@@ -16,6 +17,17 @@
 #include "hid_core/hid_util.h"
 
 namespace Core::HID {
+namespace {
+// Experiment: deliver every motion sample a controller reports instead of the latest at each
+// update. The Joy-Con driver then sends its three samples per report separately.
+bool MotionSamplesEnabled() {
+    static const bool enabled = [] {
+        const char* setting = std::getenv("EDEN_NX2_MOTION_SAMPLES");
+        return setting != nullptr && setting[0] == '1';
+    }();
+    return enabled;
+}
+} // namespace
 constexpr s32 HID_TRIGGER_MAX = 0x7fff;
 constexpr u32 TURBO_BUTTON_DELAY = 4;
 // Use a common UUID for TAS and Virtual Gamepad
@@ -1057,6 +1069,15 @@ void EmulatedController::SetMotion(const Common::Input::CallbackStatus& callback
     motion.euler = emulated.GetEulerAngles();
     motion.orientation = emulated.GetOrientation();
     motion.is_at_rest = !emulated.IsMoving(motion_sensitivity);
+
+    if (MotionSamplesEnabled() && index < motion_queue.size()) {
+        std::scoped_lock lock{motion_queue_mutex};
+        auto& queue = motion_queue[index];
+        queue.push_back(motion);
+        while (queue.size() > 16) {
+            queue.pop_front();
+        }
+    }
 }
 
 void EmulatedController::SetColors(const Common::Input::CallbackStatus& callback,
@@ -1871,6 +1892,21 @@ NpadGcTriggerState EmulatedController::GetTriggers() const {
 
 MotionState EmulatedController::GetMotions() const {
     return controller.motion_state;
+}
+
+MotionState EmulatedController::TakeMotions() {
+    MotionState state = controller.motion_state;
+    if (!MotionSamplesEnabled()) {
+        return state;
+    }
+    std::scoped_lock lock{motion_queue_mutex};
+    for (std::size_t i = 0; i < motion_queue.size() && i < state.size(); ++i) {
+        if (!motion_queue[i].empty()) {
+            state[i] = motion_queue[i].front();
+            motion_queue[i].pop_front();
+        }
+    }
+    return state;
 }
 
 ControllerColors EmulatedController::GetColors() const {
