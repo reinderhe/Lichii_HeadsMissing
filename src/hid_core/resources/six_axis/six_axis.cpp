@@ -301,6 +301,20 @@ Result SixAxis::GetSixAxisSensorIcInformation(
     // TODO: Request this data to the controller. On error return 0xd8ca
     const auto& sixaxis = GetSixaxisState(sixaxis_handle);
     ic_information = sixaxis.ic_information;
+
+    // Experiment: EDEN_NX2_SIXAXIS_ACCEL_TOLERANCE=<g> widens the accelerometer zero offset range
+    // games check their own calibration against (+-0.0612 g by default). Switch Sports Resort
+    // fails to calibrate when a Joy-Con lying flat reads more than that on one axis.
+    static const f32 accel_tolerance = [] {
+        const char* setting = std::getenv("EDEN_NX2_SIXAXIS_ACCEL_TOLERANCE");
+        const f32 value = setting != nullptr ? std::strtof(setting, nullptr) : 0.0f;
+        return value > 0.0f && value < 1.0f ? value : 0.0f;
+    }();
+    if (accel_tolerance > 0.0f) {
+        ic_information.unknown_accel_data1 = {-accel_tolerance, -accel_tolerance,
+                                              -accel_tolerance, accel_tolerance,
+                                              accel_tolerance,  accel_tolerance};
+    }
     return ResultSuccess;
 }
 
