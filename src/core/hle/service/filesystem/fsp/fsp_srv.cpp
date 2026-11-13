@@ -9,6 +9,8 @@
 #include <cinttypes>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <optional>
 #include <span>
@@ -473,6 +475,39 @@ std::vector<MiiTraceFile::Entry> ListRomFSFiles(const FileSys::VirtualFile& romf
         pos += 0x20 + ((name_size + 3) & ~std::size_t{3});
     }
     return out;
+}
+
+// EDEN_NX2_MII_DUMP=<folder>: also write the files of the Mii model archive served below into that
+// folder, once a run (for Butterfly, the Sports Resort recompilation, which reads them from its game folder:
+// <game>\\systemdata\\0400000000000849). The folder is made if it is not there; files there are replaced.
+void DumpMiiModel(const FileSys::VirtualFile& data) {
+    static bool done = false;
+    const char* folder = std::getenv("EDEN_NX2_MII_DUMP");
+    if (folder == nullptr || folder[0] == '\0' || done || data == nullptr) {
+        return;
+    }
+    done = true;
+    const auto root = FileSys::ExtractRomFS(data);
+    if (root == nullptr) {
+        LOG_ERROR(Service_FS, "Mii model dump: the archive could not be read");
+        return;
+    }
+    const std::filesystem::path dir{reinterpret_cast<const char8_t*>(folder)};
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::size_t written = 0;
+    for (const auto& file : root->GetFiles()) {
+        const std::vector<u8> bytes = file->ReadAllBytes();
+        std::ofstream out(dir / std::filesystem::path{reinterpret_cast<const char8_t*>(file->GetName().c_str())},
+                          std::ios::binary | std::ios::trunc);
+        if (!out) {
+            LOG_ERROR(Service_FS, "Mii model dump: could not write {}", file->GetName());
+            continue;
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        ++written;
+    }
+    LOG_WARNING(Service_FS, "Mii model dump: {} files written to {}", written, folder);
 }
 
 FileSys::VirtualFile InstrumentMiiModel(FileSys::VirtualFile data) {
@@ -995,9 +1030,9 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
         if (data) {
             LOG_WARNING(Service_FS, "Serving MiiModel {:016X} for Switch 2 system data {:016X}",
                         MiiModelId, title_id);
-            *out_interface =
-                std::make_shared<IStorage>(
-                    system, InstrumentMiiModel(AddOunceTextureAliases(std::move(data))));
+            auto served = AddOunceTextureAliases(std::move(data));
+            DumpMiiModel(served);
+            *out_interface = std::make_shared<IStorage>(system, InstrumentMiiModel(std::move(served)));
             R_SUCCEED();
         }
         LOG_WARNING(Service_FS, "MiiModel {:016X} is not installed, no fallback for {:016X}",
